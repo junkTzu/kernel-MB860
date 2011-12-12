@@ -35,16 +35,18 @@
 #include <linux/oom.h>
 #include <linux/sched.h>
 #include <linux/notifier.h>
+#include <linux/slab.h>
 
+#define LOWMEM_ADJ_SLOTS 12
 static uint32_t lowmem_debug_level = 2;
-static int lowmem_adj[6] = {
+static int lowmem_adj[LOWMEM_ADJ_SLOTS] = {
 	0,
 	1,
 	6,
 	12,
 };
 static int lowmem_adj_size = 4;
-static size_t lowmem_minfree[6] = {
+static size_t lowmem_minfree[LOWMEM_ADJ_SLOTS] = {
 	3 * 512,	/* 6MB */
 	2 * 1024,	/* 8MB */
 	4 * 1024,	/* 16MB */
@@ -52,7 +54,8 @@ static size_t lowmem_minfree[6] = {
 };
 static int lowmem_minfree_size = 4;
 
-static uint32_t lowmem_multiplier = 32;
+static uint32_t lowmem_multiplier = 36;
+static int lowmem_oldmethod = 0;
 
 static struct task_struct *lowmem_deathpending;
 static unsigned long lowmem_deathpending_timeout;
@@ -99,7 +102,8 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 	int other_free = global_page_state(NR_FREE_PAGES);
 	int other_file = global_page_state(NR_FILE_PAGES) -
 						global_page_state(NR_SHMEM);
-	unsigned lowmem_delta = 262144;	/* 1GB system RAM, in pages */
+	unsigned lowmem_delta = (1048576 * 1024) / PAGE_SIZE; /* 1GB system RAM */
+	int *ooms_seen = kzalloc(sizeof(int) * 20, GFP_ATOMIC);
 
 	/*
 	 * If we already have a death outstanding, then
@@ -143,7 +147,6 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		struct mm_struct *mm;
 		struct signal_struct *sig;
 		int oom_adj;
-		unsigned delta;
 
 		task_lock(p);
 		mm = p->mm;
@@ -153,6 +156,11 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 			continue;
 		}
 		oom_adj = sig->oom_adj;
+
+		lowmem_print(5, "oom_adj for pid %d: %d\n", p->pid, oom_adj);
+		if (ooms_seen && (oom_adj > -1))
+			ooms_seen[oom_adj]++;
+
 		if (oom_adj < min_adj) {
 			task_unlock(p);
 			continue;
@@ -165,19 +173,25 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 			if (oom_adj < selected_oom_adj)
 				continue;
 
-			delta = abs((nr_to_scan * lowmem_multiplier) - tasksize);
-			lowmem_print(3, "%s: l_delta %u delta %u nr_to_scan * mult %u tasksize %u\n",
-				__func__, lowmem_delta, delta,
-				nr_to_scan * lowmem_multiplier, tasksize);
-			if ((oom_adj == selected_oom_adj) && (delta > lowmem_delta))
-				continue;
-			if(delta <= lowmem_delta)
-				lowmem_delta = delta;
+			if (lowmem_oldmethod) {
+				if (oom_adj == selected_oom_adj &&
+				    tasksize <= selected_tasksize)
+					continue;
+			} else {
+				unsigned delta = abs((nr_to_scan * lowmem_multiplier) - tasksize);
+				lowmem_print(3, "%s: l_delta %u delta %u nr_to_scan * mult %u tasksize %u oom_adj %d\n",
+					__func__, lowmem_delta, delta,
+					nr_to_scan * lowmem_multiplier, tasksize, oom_adj);
+				if ((oom_adj == selected_oom_adj) && (delta > lowmem_delta))
+					continue;
+				if (delta <= lowmem_delta)
+					lowmem_delta = delta;
+			}
 		}
 		selected = p;
 		selected_tasksize = tasksize;
 		selected_oom_adj = oom_adj;
-		if(!banner++) {
+		if (!banner++) {
 			int i;
 			lowmem_print(2, "NTS:%7luK MA:%3d MFs:",
 				nr_to_scan * PAGESZ_KB, min_adj);
@@ -203,6 +217,16 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 	}
 	lowmem_print(4, "lowmem_shrink %d, %x, return %d\n",
 		     nr_to_scan, gfp_mask, rem);
+	if (ooms_seen) {
+		int i;
+		lowmem_print(3, "ooms seen: ");
+		for (i = 0; i < 20; i++)
+			if (ooms_seen[i])
+				lowmem_print(3, "%2d:%-2d ",
+				  i, ooms_seen[i]);
+		lowmem_print(3, "\n");
+	};
+	kfree(ooms_seen);
 	spin_unlock(&lowmem_lock);
 	return rem;
 }
@@ -232,6 +256,7 @@ module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
 			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
 module_param_named(multiplier, lowmem_multiplier, uint, S_IRUGO | S_IWUSR);
+module_param_named(old_method, lowmem_oldmethod, int, S_IRUGO| S_IWUSR);
 
 module_init(lowmem_init);
 module_exit(lowmem_exit);
