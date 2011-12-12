@@ -36,6 +36,7 @@
 #include <linux/sched.h>
 #include <linux/notifier.h>
 #include <linux/slab.h>
+#include <linux/math64.h>
 
 #define LOWMEM_ADJ_SLOTS 12
 static uint32_t lowmem_debug_level = 2;
@@ -54,15 +55,20 @@ static size_t lowmem_minfree[LOWMEM_ADJ_SLOTS] = {
 };
 static int lowmem_minfree_size = 4;
 
-static uint32_t lowmem_multiplier = 36;
-static int lowmem_oldmethod = 0;
-
 static struct task_struct *lowmem_deathpending;
 static unsigned long lowmem_deathpending_timeout;
+
+static int lowmem_oldmethod = 0;
+static uint64_t pages_total;
+static unsigned long procs_total;
+static unsigned lowmem_avg_pages;
 
 DEFINE_SPINLOCK(lowmem_lock);
 
 #define PAGESZ_KB (PAGE_SIZE / 1024)
+
+/* approx pg_sz of "average" adjusted process */
+#define INITIAL_KILL_TARGET 4608;
 
 #define lowmem_print(level, x...)			\
 	do {						\
@@ -128,7 +134,7 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		}
 	}
 	if (nr_to_scan > 0)
-		lowmem_print(3, "lowmem_shrink %d, mask %X, ofree %d ofile %d, min_adj %d\n",
+		lowmem_print(4, "lowmem_shrink %d, mask %X, ofree %d ofile %d, min_adj %d\n",
 			     nr_to_scan, gfp_mask, other_free, other_file,
 			     min_adj);
 	rem = global_page_state(NR_ACTIVE_ANON) +
@@ -161,12 +167,13 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		if (ooms_seen && (oom_adj > -1))
 			ooms_seen[oom_adj]++;
 
+		pages_total += tasksize = get_mm_rss(mm);
+		task_unlock(p);
+		procs_total++;
+
 		if (oom_adj < min_adj) {
-			task_unlock(p);
 			continue;
 		}
-		tasksize = get_mm_rss(mm);
-		task_unlock(p);
 		if (tasksize <= 0)
 			continue;
 		if (selected) {
@@ -178,10 +185,18 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 				    tasksize <= selected_tasksize)
 					continue;
 			} else {
-				unsigned delta = abs((nr_to_scan * lowmem_multiplier) - tasksize);
-				lowmem_print(3, "%s: l_delta %u delta %u nr_to_scan * mult %u tasksize %u oom_adj %d\n",
+				unsigned kill_target, delta;
+
+				if (procs_total > 100)
+					kill_target = (unsigned) lowmem_avg_pages;
+				else
+					kill_target = INITIAL_KILL_TARGET;
+
+				delta = abs(kill_target - tasksize);
+
+				lowmem_print(3, "%s: l_delta %u delta %u kill_target %u tasksize %u oom_adj %d\n",
 					__func__, lowmem_delta, delta,
-					nr_to_scan * lowmem_multiplier, tasksize, oom_adj);
+					kill_target, tasksize, oom_adj);
 				if ((oom_adj == selected_oom_adj) && (delta > lowmem_delta))
 					continue;
 				if (delta <= lowmem_delta)
@@ -193,14 +208,14 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		selected_oom_adj = oom_adj;
 		if (!banner++) {
 			int i;
-			lowmem_print(2, "NTS:%7luK MA:%3d MFs:",
+			lowmem_print(4, "NTS:%7luK MA:%3d MFs:",
 				nr_to_scan * PAGESZ_KB, min_adj);
 			for (i = 0; i < max(lowmem_minfree_size, lowmem_adj_size); i++) {
-				lowmem_print(2, "%3d:%6luK",
+				lowmem_print(4, "%3d:%6luK",
 				i < lowmem_adj_size ? lowmem_adj[i] : -1,
 				i < lowmem_minfree_size ? lowmem_minfree[i] * PAGESZ_KB : 0);
 			}
-			lowmem_print(2, "\n");
+			lowmem_print(4, "\n");
 		};
 		lowmem_print(2, "select %d (%s), adj %d, size %d (%luK), to kill\n",
 			     p->pid, p->comm, oom_adj, tasksize, tasksize * PAGESZ_KB);
@@ -219,15 +234,16 @@ static int lowmem_shrink(struct shrinker *s, int nr_to_scan, gfp_t gfp_mask)
 		     nr_to_scan, gfp_mask, rem);
 	if (ooms_seen) {
 		int i;
-		lowmem_print(3, "ooms seen: ");
+		lowmem_print(4, "ooms seen: ");
 		for (i = 0; i < 20; i++)
 			if (ooms_seen[i])
-				lowmem_print(3, "%2d:%-2d ",
+				lowmem_print(4, "%2d:%-2d ",
 				  i, ooms_seen[i]);
-		lowmem_print(3, "\n");
+		lowmem_print(4, "\n");
 	};
 	kfree(ooms_seen);
 	spin_unlock(&lowmem_lock);
+	lowmem_avg_pages = (unsigned) div_u64(pages_total, procs_total);
 	return rem;
 }
 
@@ -255,8 +271,8 @@ module_param_array_named(adj, lowmem_adj, int, &lowmem_adj_size,
 module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
 			 S_IRUGO | S_IWUSR);
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
-module_param_named(multiplier, lowmem_multiplier, uint, S_IRUGO | S_IWUSR);
 module_param_named(old_method, lowmem_oldmethod, int, S_IRUGO| S_IWUSR);
+module_param_named(avg_pages, lowmem_avg_pages, uint, S_IRUGO);
 
 module_init(lowmem_init);
 module_exit(lowmem_exit);
