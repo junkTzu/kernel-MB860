@@ -50,7 +50,12 @@ static struct cpufreq_frequency_table freq_table[] = {
 	{ 5, 816000 },
 	{ 6, 912000 },
 	{ 7, 1000000 },
-	{ 8, CPUFREQ_TABLE_END },
+    { 8, 1200000 },
+    { 9, 1408000 },
+    { 10, 1504000 },
+    { 11, 1600000 },
+    { 12, 1704000 },
+	{ 13, CPUFREQ_TABLE_END },
 };
 
 #define NUM_CPUS	2
