@@ -62,6 +62,7 @@ static int lowmem_oldmethod = 0;
 static uint64_t pages_total;
 static unsigned long procs_total;
 static unsigned lowmem_avg_pages;
+static int number_of_slots = LOWMEM_ADJ_SLOTS;
 
 DEFINE_SPINLOCK(lowmem_lock);
 
@@ -273,6 +274,7 @@ module_param_array_named(minfree, lowmem_minfree, uint, &lowmem_minfree_size,
 module_param_named(debug_level, lowmem_debug_level, uint, S_IRUGO | S_IWUSR);
 module_param_named(old_method, lowmem_oldmethod, int, S_IRUGO| S_IWUSR);
 module_param_named(avg_pages, lowmem_avg_pages, uint, S_IRUGO);
+module_param_named(slot_count, number_of_slots, int, S_IRUGO);
 
 module_init(lowmem_init);
 module_exit(lowmem_exit);
