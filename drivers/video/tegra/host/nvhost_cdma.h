@@ -25,9 +25,8 @@
 
 #include <linux/sched.h>
 #include <linux/semaphore.h>
-
-#include <mach/nvhost.h>
-#include <mach/nvmap.h>
+#include <linux/nvhost.h>
+#include <linux/nvmap.h>
 
 #include "nvhost_acm.h"
 
@@ -54,7 +53,7 @@
 #define NVHOST_GATHER_QUEUE_SIZE 512
 
 struct push_buffer {
-	struct nvmap_handle_ref *mem; /* handle to pushbuffer memory */
+	struct nvmap_handle *mem; /* handle to pushbuffer memory */
 	u32 *mapped;		/* mapped pushbuffer memory */
 	u32 phys;		/* physical address of pushbuffer */
 	u32 fence;		/* index we've written */
@@ -91,13 +90,10 @@ void	nvhost_cdma_deinit(struct nvhost_cdma *cdma);
 void	nvhost_cdma_stop(struct nvhost_cdma *cdma);
 void	nvhost_cdma_begin(struct nvhost_cdma *cdma);
 void	nvhost_cdma_push(struct nvhost_cdma *cdma, u32 op1, u32 op2);
-void	nvhost_cdma_end(struct nvmap_client *user_nvmap,
-			struct nvhost_cdma *cdma,
-			u32 sync_point_id, u32 sync_point_value,
-			struct nvmap_handle **handles, unsigned int nr_handles);
+void	nvhost_cdma_end(struct nvhost_cdma *cdma,
+		u32 sync_point_id, u32 sync_point_value,
+		struct nvmap_handle **handles, unsigned int nr_handles);
 void	nvhost_cdma_update(struct nvhost_cdma *cdma);
 void	nvhost_cdma_flush(struct nvhost_cdma *cdma);
-void    nvhost_cdma_find_gather(struct nvhost_cdma *cdma, u32 dmaget,
-                u32 *addr, u32 *size);
 
 #endif

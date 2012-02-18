@@ -28,7 +28,7 @@
 #include <linux/mutex.h>
 #include <linux/clk.h>
 
-#define NVHOST_MODULE_MAX_CLOCKS 3
+#define NVHOST_MODULE_MAX_CLOCKS 2
 
 struct nvhost_module;
 
@@ -50,14 +50,13 @@ struct nvhost_module {
 	atomic_t refcount;
 	wait_queue_head_t idle;
 	struct nvhost_module *parent;
-	int powergate_id;
 };
 
 int nvhost_module_init(struct nvhost_module *mod, const char *name,
 		nvhost_modulef func, struct nvhost_module *parent,
 		struct device *dev);
 void nvhost_module_deinit(struct nvhost_module *mod);
-void nvhost_module_suspend(struct nvhost_module *mod);
+void nvhost_module_suspend(struct nvhost_module *mod, bool system_suspend);
 
 void nvhost_module_busy(struct nvhost_module *mod);
 void nvhost_module_idle_mult(struct nvhost_module *mod, int refs);

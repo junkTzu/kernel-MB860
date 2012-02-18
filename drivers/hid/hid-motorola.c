@@ -40,11 +40,17 @@ struct motorola_sc {
 	struct work_struct work;
 };
 
+extern void cpcap_accy_whisper_audio_switch_spdif_state(bool state);
+
 static void audio_jack_status_work(struct work_struct *work)
 {
 	struct motorola_sc *sc = container_of(work, struct motorola_sc, work);
 
-	cpcap_accy_whisper_spdif_set_state(sc->audio_cable_inserted);
+	bool state;
+
+	state = ((sc->audio_cable_inserted > 0) ? true:false);
+	//cpcap_accy_whisper_spdif_set_state(sc->audio_cable_inserted);
+	cpcap_accy_whisper_audio_switch_spdif_state(state);
 }
 
 static int mot_rawevent(struct hid_device *hdev, struct hid_report *report,

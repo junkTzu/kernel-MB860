@@ -45,6 +45,13 @@
 #define	gadget_is_goku(g)	0
 #endif
 
+/* not yet stable on 2.6 (would help "original Zaurus") */
+#ifdef CONFIG_USB_GADGET_SA1100
+#define	gadget_is_sa1100(g)	!strcmp("sa1100_udc", (g)->name)
+#else
+#define	gadget_is_sa1100(g)	0
+#endif
+
 #ifdef CONFIG_USB_GADGET_OMAP
 #define	gadget_is_omap(g)	!strcmp("omap_udc", (g)->name)
 #else
@@ -120,6 +127,12 @@
 #define gadget_is_ci13xxx_pci(g)	0
 #endif
 
+#ifdef CONFIG_USB_GADGET_TEGRA
+#define gadget_is_tegra(g)	(!strcmp("tegra-udc", (g)->name))
+#else
+#define gadget_is_tegra(g)	0
+#endif
+
 // CONFIG_USB_GADGET_SX2
 // CONFIG_USB_GADGET_AU1X00
 // ...
@@ -171,6 +184,8 @@ static inline int usb_gadget_controller_number(struct usb_gadget *gadget)
 		return 0x02;
 	else if (gadget_is_pxa(gadget))
 		return 0x03;
+	else if (gadget_is_sa1100(gadget))
+		return 0x05;
 	else if (gadget_is_goku(gadget))
 		return 0x06;
 	else if (gadget_is_omap(gadget))

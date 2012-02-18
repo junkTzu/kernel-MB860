@@ -44,8 +44,10 @@ obj-$(CONFIG_LEDS_NS2)			+= leds-ns2.o
 obj-$(CONFIG_LEDS_NETXBIG)		+= leds-netxbig.o
 obj-$(CONFIG_LEDS_AUO_PANEL)		+= leds-auo-panel-backlight.o
 obj-$(CONFIG_LEDS_CPCAP)		+= leds-ld-cpcap.o
+obj-$(CONFIG_LEDS_CPCAP_RGB)		+= leds-cpcap-rgb.o
 obj-$(CONFIG_LEDS_LP8550)		+= leds-lp8550.o
 obj-$(CONFIG_LEDS_LM3559)		+= led-lm3559.o
+obj-$(CONFIG_LEDS_LM3532)		+= leds-lm3532.o
 
 # LED SPI Drivers
 obj-$(CONFIG_LEDS_DAC124S085)		+= leds-dac124s085.o

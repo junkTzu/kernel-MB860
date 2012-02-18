@@ -25,8 +25,7 @@
 
 #include <linux/kernel.h>
 #include <linux/sched.h>
-#include <mach/nvhost.h>
-#include <mach/nvmap.h>
+#include <linux/nvhost.h>
 #include <asm/atomic.h>
 
 #include "nvhost_hardware.h"
@@ -145,8 +144,7 @@ static inline int nvhost_syncpt_wait(struct nvhost_syncpt *sp, u32 id, u32 thres
 	return nvhost_syncpt_wait_timeout(sp, id, thresh, MAX_SCHEDULE_TIMEOUT);
 }
 
-int nvhost_syncpt_wait_check(struct nvmap_client *nvmap,
-			struct nvhost_syncpt *sp, u32 mask,
+int nvhost_syncpt_wait_check(struct nvhost_syncpt *sp, u32 mask,
 			struct nvhost_waitchk *waitp, u32 num_waits);
 
 const char *nvhost_syncpt_name(u32 id);

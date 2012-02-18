@@ -220,12 +220,16 @@ struct sdhci_ops {
 	unsigned int	(*get_timeout_clock)(struct sdhci_host *host);
 	int		(*platform_8bit_width)(struct sdhci_host *host,
 					       int width);
-	void (*platform_send_init_74_clocks)(struct sdhci_host *host,
+	void 	(*platform_send_init_74_clocks)(struct sdhci_host *host,
 					     u8 power_mode);
-	unsigned int    (*get_ro)(struct sdhci_host *host);
+	int     (*get_ro)(struct sdhci_host *host);
 
 	int		(*suspend)(struct sdhci_host *host, pm_message_t state);
 	int		(*resume)(struct sdhci_host *host);
+
+	/* returns card read-only status in a host-specific way if
+	 * SDHCI_QUIRK_BROKEN_WRITE_PROTECT is set */
+	bool		(*card_detect)(struct sdhci_host *host);
 };
 
 #ifdef CONFIG_MMC_SDHCI_IO_ACCESSORS

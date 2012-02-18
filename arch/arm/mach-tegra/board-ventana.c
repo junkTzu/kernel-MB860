@@ -206,7 +206,7 @@ static struct platform_device *ventana_devices[] __initdata = {
 	&tegra_otg_device,
 	&androidusb_device,
 	&debug_uart,
-	&pmu_device,
+	&tegra_pmu_device,
 	&tegra_udc_device,
 	&tegra_gart_device,
 	&tegra_aes_device,
@@ -247,7 +247,7 @@ static void __init tegra_ventana_init(void)
 {
 	char serial[20];
 
-	tegra_common_init();
+	tegra_init_early();
 	tegra_clk_init_from_table(ventana_clk_init_table);
 	ventana_pinmux_init();
 

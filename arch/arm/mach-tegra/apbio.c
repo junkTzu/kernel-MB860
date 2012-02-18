@@ -132,8 +132,7 @@ void tegra_apb_writel(u32 value, unsigned long offset)
 static int tegra_init_apb_dma(void)
 {
 #ifdef CONFIG_TEGRA_SYSTEM_DMA
-	tegra_apb_dma = tegra_dma_allocate_channel(TEGRA_DMA_MODE_ONESHOT |
-		TEGRA_DMA_SHARED);
+	tegra_apb_dma = tegra_dma_allocate_channel(TEGRA_DMA_MODE_ONESHOT |	TEGRA_DMA_SHARED);
 	if (!tegra_apb_dma) {
 		pr_err("%s: can not allocate dma channel\n", __func__);
 		return -ENODEV;

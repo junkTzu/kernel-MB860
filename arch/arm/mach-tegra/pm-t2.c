@@ -1,9 +1,9 @@
 /*
- * arch/arm/mach-tegra/suspend-t2.c
+ * arch/arm/mach-tegra/pm-t2.c
  *
- * BootROM LP0 scratch register preservation for Tegra 2
+ * Tegra 2 LP0 scratch register preservation
  *
- * Copyright (c) 2009-2010, NVIDIA Corporation.
+ * Copyright (c) 2009-2011, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,8 +27,6 @@
 
 #include <mach/iomap.h>
 #include <mach/irqs.h>
-
-#include "gpio-names.h"
 
 #define PMC_SCRATCH3	0x5c
 #define PMC_SCRATCH5	0x64
@@ -351,6 +349,7 @@ void __init tegra2_lp0_suspend_init(void)
 			r |= v;
 		}
 
-		writel(r, scratch[i].scratch_addr);
+		__raw_writel(r, scratch[i].scratch_addr);
 	}
+	wmb();
 }

@@ -21,9 +21,8 @@
  */
 
 #include "nvhost_channel.h"
-#include "dev.h"
+#include "nvhost_dev.h"
 #include "nvhost_hwctx.h"
-
 #include <linux/platform_device.h>
 
 #define NVMODMUTEX_2D_FULL   (1)
@@ -75,9 +74,10 @@ static const struct nvhost_channeldesc channelmap[] = {
 	/* channel 4 */
 	.name	       = "vi",
 	.syncpts       = BIT(NVSYNCPT_VI_ISP_0) | BIT(NVSYNCPT_VI_ISP_1) |
-			 BIT(NVSYNCPT_VI_ISP_2) | BIT(NVSYNCPT_VI_ISP_3) |
-			 BIT(NVSYNCPT_VI_ISP_4) | BIT(NVSYNCPT_VI_ISP_5),
+		         BIT(NVSYNCPT_VI_ISP_2) | BIT(NVSYNCPT_VI_ISP_3) |
+		         BIT(NVSYNCPT_VI_ISP_4) | BIT(NVSYNCPT_VI_ISP_5),
 	.modulemutexes = BIT(NVMODMUTEX_VI),
+	.exclusive     = true,
 },
 {
 	/* channel 5 */
@@ -87,6 +87,7 @@ static const struct nvhost_channeldesc channelmap[] = {
 	.waitbases     = BIT(NVWAITBASE_MPE),
 	.class	       = NV_VIDEO_ENCODE_MPEG_CLASS_ID,
 	.power	       = power_mpe,
+	.exclusive     = true,
 },
 {
 	/* channel 6 */
@@ -104,13 +105,14 @@ static inline void __iomem *channel_aperture(void __iomem *p, int ndx)
 }
 
 int __init nvhost_channel_init(struct nvhost_channel *ch,
-			struct nvhost_master *dev, int index)
+			struct nvhost_dev *dev, int index)
 {
 	BUILD_BUG_ON(NVHOST_NUMCHANNELS != ARRAY_SIZE(channelmap));
 
 	ch->dev = dev;
 	ch->desc = &channelmap[index];
 	ch->aperture = channel_aperture(dev->aperture, index);
+	ch->ctx_sw_count = 0;
 	mutex_init(&ch->reflock);
 	mutex_init(&ch->submitlock);
 
@@ -130,13 +132,15 @@ struct nvhost_channel *nvhost_getchannel(struct nvhost_channel *ch)
 			if (err)
 				nvhost_module_deinit(&ch->mod);
 		}
+	} else if (ch->desc->exclusive) {
+		err = -EBUSY;
 	}
 	if (!err) {
 		ch->refcount++;
 	}
 	mutex_unlock(&ch->reflock);
 
-	return err ? NULL : ch;
+	return err ? ERR_PTR(err) : ch;
 }
 
 void nvhost_putchannel(struct nvhost_channel *ch, struct nvhost_hwctx *ctx)
@@ -168,12 +172,16 @@ void nvhost_channel_suspend(struct nvhost_channel *ch)
 	mutex_unlock(&ch->reflock);
 }
 
-void nvhost_channel_submit(struct nvhost_channel *ch,
-                           struct nvmap_client *user_nvmap,
-                           struct nvhost_op_pair *ops, int num_pairs,
-                           struct nvhost_cpuinterrupt *intrs, int num_intrs,
-                           struct nvmap_handle **unpins, int num_unpins,
-                           u32 syncpt_id, u32 syncpt_val)
+void nvhost_channel_submit(
+	struct nvhost_channel *ch,
+	struct nvhost_op_pair *ops,
+	int num_pairs,
+	struct nvhost_cpuinterrupt *intrs,
+	int num_intrs,
+	struct nvmap_handle **unpins,
+	int num_unpins,
+	u32 syncpt_id,
+	u32 syncpt_val)
 {
 	int i;
 	struct nvhost_op_pair* p;
@@ -192,8 +200,7 @@ void nvhost_channel_submit(struct nvhost_channel *ch,
 		nvhost_cdma_push(&ch->cdma, p->op1, p->op2);
 
 	/* end CDMA submit & stash pinned hMems into sync queue for later cleanup */
-	nvhost_cdma_end(user_nvmap, &ch->cdma, syncpt_id, syncpt_val,
-                        unpins, num_unpins);
+	nvhost_cdma_end(&ch->cdma, syncpt_id, syncpt_val, unpins, num_unpins);
 }
 
 static void power_2d(struct nvhost_module *mod, enum nvhost_power_action action)
@@ -223,21 +230,14 @@ static void power_3d(struct nvhost_module *mod, enum nvhost_power_action action)
 			save.op2 = ch->cur_ctx->save_phys;
 			ctxsw.intr_data = ch->cur_ctx;
 			ctxsw.syncpt_val = syncval - 1;
+			nvhost_channel_submit(ch, &save, 1, &ctxsw, 1, NULL, 0, NVSYNCPT_3D, syncval);
+			ch->cur_ctx->last_access_id = NVSYNCPT_3D;
+			ch->cur_ctx->last_access_value = syncval;
 			ch->cur_ctx->valid = true;
-			ch->ctxhandler.get(ch->cur_ctx);
 			ch->cur_ctx = NULL;
-
-			nvhost_channel_submit(ch, ch->dev->nvmap,
-					      &save, 1, &ctxsw, 1, NULL, 0,
-					      NVSYNCPT_3D, syncval);
-
-			nvhost_intr_add_action(&ch->dev->intr, NVSYNCPT_3D,
-					       syncval,
-					       NVHOST_INTR_ACTION_WAKEUP,
-					       &wq, &ref);
-			wait_event(wq,
-				   nvhost_syncpt_min_cmp(&ch->dev->syncpt,
-							 NVSYNCPT_3D, syncval));
+			nvhost_intr_add_action(&ch->dev->intr, NVSYNCPT_3D, syncval,
+			NVHOST_INTR_ACTION_WAKEUP, &wq, &ref);
+			wait_event(wq, nvhost_syncpt_min_cmp(&ch->dev->syncpt, NVSYNCPT_3D, syncval));
 			nvhost_intr_put_ref(&ch->dev->intr, ref);
 			nvhost_cdma_update(&ch->cdma);
 		}

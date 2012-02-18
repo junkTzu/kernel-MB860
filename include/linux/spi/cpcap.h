@@ -65,6 +65,8 @@
 #define CPCAP_HWCFG1_SEC_STBY_VSIM      0x0004
 #define CPCAP_HWCFG1_SEC_STBY_VSIMCARD  0x0008
 #define CPCAP_HWCFG1_SOFT_RESET_HOST    0x0010
+/* Enable mapping of the PRI_STANDBY and SEC_STANDBY lines onto CPCAP GPIO. */
+#define CPCAP_HWCFG1_STBY_GPIO          0x1000
 
 #define CPCAP_WHISPER_MODE_PU       0x00000001
 #define CPCAP_WHISPER_ENABLE_UART   0x00000002
@@ -73,8 +75,21 @@
 #define CPCAP_WHISPER_ID_SIZE       16
 #define CPCAP_WHISPER_PROP_SIZE     7
 
+/* Enable mapping of the PRI_STANDBY and SEC_STANDBY lines onto CPCAP GPIO. */
+#define CPCAP_HWCFG1_STBY_GPIO          0x1000
+
+#define CPCAP_WHISPER_MODE_PU 			0x00000001
+#define CPCAP_WHISPER_ENABLE_UART		0x00000002
+
+/* When set in the regulator mode, the regulator assignment will be changed
+   to secondary when the regulator is disabled.  The mode will be set back to
+   primary when the regulator is turned on. */
+#define CPCAP_REG_OFF_MODE_SEC			((unsigned short)(0x8000))
+
 enum cpcap_regulator_id {
+	CPCAP_SW1,
 	CPCAP_SW2,
+	CPCAP_SW3,
 	CPCAP_SW4,
 	CPCAP_SW5,
 	CPCAP_VCAM,
@@ -352,6 +367,16 @@ enum {
 	CPCAP_IOCTL_NUM_ACCY__START,
 	CPCAP_IOCTL_NUM_ACCY_WHISPER,
 	CPCAP_IOCTL_NUM_ACCY__END,
+
+	CPCAP_IOCTL_NUM_AUDIO_PWR__START,
+	CPCAP_IOCTL_NUM_AUDIO_PWR_MODE,
+	CPCAP_IOCTL_NUM_AUDIO_PWR_ENABLE,
+	CPCAP_IOCTL_NUM_AUDIO_PWR__END,
+
+	CPCAP_IOCTL_NUM_TEST_SEC__START,
+	CPCAP_IOCTL_NUM_TEST_SEC_READ_REG,
+	CPCAP_IOCTL_NUM_TEST_SEC_WRITE_REG,
+	CPCAP_IOCTL_NUM_TEST_SEC__END,
 };
 
 enum cpcap_irqs {
@@ -481,6 +506,16 @@ enum cpcap_adc_type {
 	CPCAP_ADC_TYPE_BATT_PI,
 };
 
+enum cpcap_bank {
+        CPCAP_BANK_PRIMARY,
+        CPCAP_BANK_SECONDARY,
+};
+
+enum cpcap_standby {
+        CPCAP_PRISTANDBY = 0x01,
+        CPCAP_SECSTANDBY = 0x02,
+};
+
 enum cpcap_macro {
 	CPCAP_MACRO_ROMR,
 	CPCAP_MACRO_RAMW,
@@ -512,17 +547,13 @@ enum cpcap_revision {
 	CPCAP_REVISION_1_1 = 0x09,
 	CPCAP_REVISION_2_0 = 0x10,
 	CPCAP_REVISION_2_1 = 0x11,
+	CPCAP_REVISION_3_1 = 0x19,
 };
 
 enum cpcap_batt_usb_model {
 	CPCAP_BATT_USB_MODEL_NONE,
 	CPCAP_BATT_USB_MODEL_USB,
 	CPCAP_BATT_USB_MODEL_FACTORY,
-};
-
-struct cpcap_spi_init_data {
-	enum cpcap_reg reg;
-	unsigned short data;
 };
 
 struct cpcap_adc_ato {
@@ -535,6 +566,19 @@ struct cpcap_adc_ato {
 	unsigned short adc_ps_factor_out;
 	unsigned short atox_ps_factor_out;
 };
+struct cpcap_display_led {
+	unsigned int display_reg;
+	unsigned int display_mask;
+	unsigned int display_on;
+	unsigned int display_off;
+	unsigned int display_init;
+	unsigned int poll_intvl;
+	unsigned int zone0;
+	unsigned int zone1;
+	unsigned int zone2;
+	unsigned int zone3;
+	unsigned int zone4;
+};
 
 struct cpcap_batt_data {
 	int status;
@@ -543,6 +587,8 @@ struct cpcap_batt_data {
 	int capacity;
 	int batt_volt;
 	int batt_temp;
+	int batt_full_capacity;
+	int batt_capacity_one;
 };
 
 struct cpcap_batt_ac_data {
@@ -564,13 +610,58 @@ struct cpcap_rtc_time_cnt {
 struct cpcap_device;
 
 #ifdef __KERNEL__
+struct cpcap_button_led {
+	unsigned int button_reg;
+	unsigned int button_mask;
+	unsigned int button_on;
+	unsigned int button_off;
+	const char *regulator;
+};
+
+struct cpcap_kpad_led {
+	unsigned int kpad_reg;
+	unsigned int kpad_mask;
+	unsigned int kpad_on;
+	unsigned int kpad_off;
+};
+
+struct cpcap_rgb_led {
+	unsigned int rgb_reg;
+	unsigned int rgb_mask;
+	unsigned int rgb_on;
+	unsigned int rgb_off;
+	const char *regulator;
+	bool regulator_macro_controlled;
+};
+
+struct cpcap_leds {
+	struct cpcap_display_led display_led;
+	struct cpcap_button_led button_led;
+	struct cpcap_kpad_led kpad_led;
+	struct cpcap_rgb_led rgb_led;
+};
+
+struct cpcap_spi_init_data {
+	enum cpcap_reg reg;
+	unsigned short data;
+	int (*hw_check)(struct cpcap_device *);
+};
+
+/* The maximum number of mode values which can be listed for a regulator. */
+#define CPCAP_MODE_VALUE_MAX    10
+struct cpcap_mode_value {
+	unsigned short mode;
+	int (*hw_check)(struct cpcap_device *);
+};
+
 struct cpcap_platform_data {
 	struct cpcap_spi_init_data *init;
 	int init_len;
-	unsigned short *regulator_mode_values;
-	unsigned short *regulator_off_mode_values;
+	struct cpcap_mode_value **regulator_mode_values;
+	struct cpcap_mode_value **regulator_off_mode_values;
 	struct regulator_init_data *regulator_init;
 	struct cpcap_adc_ato *adc_ato;
+	struct cpcap_leds *leds;
 	void (*ac_changed)(struct power_supply *,
 			   struct cpcap_batt_ac_data *);
 	void (*batt_changed)(struct power_supply *,
@@ -578,6 +669,8 @@ struct cpcap_platform_data {
 	void (*usb_changed)(struct power_supply *,
 			    struct cpcap_batt_usb_data *);
 	u16 hwcfg[CPCAP_HWCFG_NUM];
+	unsigned short wdt_disable;
+	int spdif_gpio;
 };
 
 struct cpcap_whisper_pdata {
@@ -651,6 +744,9 @@ struct cpcap_whisper_request {
 #define CPCAP_IOCTL_TEST_READ_REG \
 	_IOWR(0, CPCAP_IOCTL_NUM_TEST_READ_REG, struct cpcap_regacc*)
 
+#define CPCAP_IOCTL_TEST_SEC_READ_REG \
+	_IOWR(0, CPCAP_IOCTL_NUM_TEST_SEC_READ_REG, struct cpcap_regacc*)
+
 /*
  * Writes the specifed cpcap register.
  *
@@ -665,6 +761,9 @@ struct cpcap_whisper_request {
  */
 #define CPCAP_IOCTL_TEST_WRITE_REG \
 	_IOWR(0, CPCAP_IOCTL_NUM_TEST_WRITE_REG, struct cpcap_regacc*)
+
+#define CPCAP_IOCTL_TEST_SEC_WRITE_REG \
+	_IOWR(0, CPCAP_IOCTL_NUM_TEST_SEC_WRITE_REG, struct cpcap_regacc*)
 
 #define CPCAP_IOCTL_ADC_PHASE \
 	_IOWR(0, CPCAP_IOCTL_NUM_ADC_PHASE, struct cpcap_adc_phase*)
@@ -697,19 +796,26 @@ struct cpcap_whisper_request {
 #define CPCAP_IOCTL_ACCY_WHISPER \
 	_IOW(0, CPCAP_IOCTL_NUM_ACCY_WHISPER, struct cpcap_whisper_request*)
 
+#define CPCAP_IOCTL_AUDIO_PWR_MODE \
+	_IOW(0, CPCAP_IOCTL_NUM_AUDIO_PWR_MODE,  unsigned short)
+
+#define CPCAP_IOCTL_AUDIO_PWR_ENABLE \
+	_IOW(0, CPCAP_IOCTL_NUM_AUDIO_PWR_ENABLE,  unsigned short)
+
 #ifdef __KERNEL__
 struct cpcap_device {
-	struct spi_device	*spi;
+	struct spi_device		*spi;
 	enum cpcap_vendor       vendor;
 	enum cpcap_revision     revision;
-	void			*keydata;
+	void					*keydata;
 	struct platform_device  *regulator_pdev[CPCAP_NUM_REGULATORS];
-	void			*irqdata;
-	void			*adcdata;
-	void			*battdata;
-	void			*ucdata;
-	void			*accydata;
-	void			(*h2w_new_state)(int);
+	void					*irqdata;
+	void					*adcdata;
+	void					*battdata;
+	void					*ucdata;
+	void					*accydata;
+	void					(*h2w_new_state)(int);
+	int						spdif_gpio;
 };
 
 static inline void cpcap_set_keydata(struct cpcap_device *cpcap, void *data)
@@ -727,6 +833,14 @@ int cpcap_regacc_write(struct cpcap_device *cpcap, enum cpcap_reg reg,
 
 int cpcap_regacc_read(struct cpcap_device *cpcap, enum cpcap_reg reg,
 		      unsigned short *value_ptr);
+
+int cpcap_regacc_write_secondary(struct cpcap_device *cpcap, enum cpcap_reg reg,
+		unsigned short value, unsigned short mask);
+
+int cpcap_regacc_read_secondary(struct cpcap_device *cpcap, enum cpcap_reg reg,
+		unsigned short *value_ptr);
+
+void cpcap_regacc_dump(struct cpcap_device *cpcap, char *);
 
 int cpcap_regacc_init(struct cpcap_device *cpcap);
 
@@ -778,15 +892,27 @@ void cpcap_batt_set_usb_prop_online(struct cpcap_device *cpcap, int online,
 void cpcap_batt_set_usb_prop_curr(struct cpcap_device *cpcap,
 				  unsigned int curr);
 
-int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro);
+//Motorola specific CPCAP start/stop
+/*int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro);
 
-int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_macro macro);
+int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_macro macro);*/
 
-unsigned char cpcap_uc_status(struct cpcap_device *cpcap,
+int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_bank bank, enum cpcap_macro macro);
+
+int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_bank bank, enum cpcap_macro macro);
+
+//CPCAP Watchdog timer stuff...
+int cpcap_uc_set_wdt_timeout(struct cpcap_device *cpcap, unsigned short timeout );
+
+int cpcap_uc_get_wdt_timeout(struct cpcap_device *cpcap, unsigned short *timeout );
+
+int cpcap_uc_get_wdt_timer(struct cpcap_device *cpcap, unsigned short *timeout );
+
+
+unsigned char cpcap_uc_status(struct cpcap_device *cpcap, enum cpcap_bank bank,
 			      enum cpcap_macro macro);
 
-int cpcap_accy_whisper(struct cpcap_device *cpcap,
-		       struct cpcap_whisper_request *req);
+int cpcap_accy_whisper(struct cpcap_device *cpcap, unsigned long cmd);
 
 void cpcap_accy_whisper_spdif_set_state(int state);
 
@@ -796,6 +922,22 @@ void cpcap_accy_whisper_spdif_set_state(int state);
 int cpcap_device_register(struct platform_device *pdev);
 int cpcap_device_unregister(struct platform_device *pdev);
 
+void cpcap_set_dock_switch(int state);
+
+int cpcap_set_wdigate(short value);
+
+int cpcap_disable_powercut(void);
+
+#if defined(CONFIG_LEDS_FLASH_RESET)
+int cpcap_direct_misc_write(unsigned short reg, unsigned short value,\
+			    unsigned short mask);
+#endif
+
+void cpcap_misc_set_curr(unsigned int curr);
+
+void cpcap_misc_clear_power_handoff_info(void);
+
+bool cpcap_misc_is_ext_power(void);
 
 #endif /* __KERNEL__ */
 #endif /* _LINUX_SPI_CPCAP_H */

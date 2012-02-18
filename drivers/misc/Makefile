@@ -57,6 +57,14 @@ obj-$(CONFIG_SENSORS_MAX9635)	+= max9635.o
 obj-$(CONFIG_SENSORS_L3G4200D)	+= l3g4200d.o
 obj-$(CONFIG_GPS_GPIO_BRCM4750)	+= gps-gpio-brcm4750.o
 obj-y				+= radio_ctrl/
+obj-$(CONFIG_VIB_GPIO)		+= vib-gpio.o
+obj-$(CONFIG_VIB_PWM)		+= vib-pwm.o
+obj-$(CONFIG_MOT_SEC_DRIVER)	+= sec/
+obj-$(CONFIG_MOT_TCMD_DRIVER)	+= tcmd_driver.o
+obj-$(CONFIG_MDM_CTRL)			+= mdm_ctrl.o
+obj-y                           += radio_ctrl/
 obj-$(CONFIG_SENSORS_MOTO_BMP085) += moto_bmp085.o
 obj-$(CONFIG_TEGRA_CRYPTO_DEV)	+= tegra-cryptodev.o
 obj-$(CONFIG_TS27010MUX)	+= ts27010mux/
+obj-$(CONFIG_TTY_SPI_SLAVE_MDM6600)   += spi-tty/
+

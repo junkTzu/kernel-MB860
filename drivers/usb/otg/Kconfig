@@ -17,6 +17,15 @@ if USB || USB_GADGET
 #
 # USB Transceiver Drivers
 #
+config USB_TEGRA_OTG
+	boolean "NVIDIA Tegra OTG support"
+	depends on USB && ARCH_TEGRA && USB_EHCI_HCD && USB_GADGET_TEGRA
+	select USB_OTG_UTILS
+	help
+	  This driver enables support for the OTG in NVIDIA Tegra SoCs by
+	  providing simple transceiver interface for detecting the Host or
+	  Device based on the USBID and VBUS sensors.
+	  
 config USB_GPIO_VBUS
 	tristate "GPIO based peripheral-only VBUS sensing 'transceiver'"
 	depends on GENERIC_GPIO
@@ -139,5 +148,12 @@ config USB_CPCAP_OTG
 	  ID and VBUS sensing. The driver receives notifications from
 	  cpcap-whisper and emulates the same behavior as when the VBUS
 	  and ID pins are connected to the app processor.
+	  
+config CPCAP_USB
+	tristate "CPCAP USB Transceiver Driver"
+	select USB_OTG_UTILS
+	help
+	  Enable this to support the USB OTG transceiver on the
+	  Motorola CPCAP PMIC
 
 endif # USB || OTG

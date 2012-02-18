@@ -35,6 +35,9 @@
 static const struct tegra_pingroup_desc *const pingroups = tegra_soc_pingroups;
 static const struct tegra_drive_pingroup_desc *const drive_pingroups = tegra_soc_drive_pingroups;
 
+extern struct tegra_pingroup_config *tegra_pinmux_get(const char *dev_id,
+         int config, int *len);
+
 static char *tegra_mux_names[TEGRA_MAX_MUX] = {
 	[TEGRA_MUX_AHB_CLK] = "AHB_CLK",
 	[TEGRA_MUX_APB_CLK] = "APB_CLK",
@@ -225,6 +228,28 @@ static int tegra_pinmux_set_func(const struct tegra_pingroup_config *config)
 	spin_unlock_irqrestore(&mux_lock, flags);
 
 	return 0;
+}
+
+int tegra_pinmux_get_func(enum tegra_pingroup pg)
+{
+	int mux = -1;
+	unsigned long reg;
+	unsigned long flags;
+
+	if (pg < 0 || pg >=  TEGRA_MAX_PINGROUP)
+		return -ERANGE;
+
+	if (pingroups[pg].mux_reg <= 0)
+		return -EINVAL;
+
+	spin_lock_irqsave(&mux_lock, flags);
+
+	reg = pg_readl(pingroups[pg].mux_reg);
+	mux = (reg >> pingroups[pg].mux_bit) & 0x3;
+
+	spin_unlock_irqrestore(&mux_lock, flags);
+
+	return mux;
 }
 
 int tegra_pinmux_set_tristate(enum tegra_pingroup pg,
@@ -658,6 +683,22 @@ void tegra_pinmux_config_tristate_table(const struct tegra_pingroup_config *conf
 				pr_err("pinmux: can't set pingroup %s tristate"
 					" to %s: %d\n",	pingroup_name(pingroup),
 					tri_name(tristate), err);
+		}
+	}
+}
+
+//Legacy hack
+void tegra_pinmux_set_vddio_tristate(enum tegra_vddio vddio,
+				     enum tegra_tristate tristate)
+{
+	int pg;
+	for (pg = 0; pg < TEGRA_MAX_PINGROUP; ++pg) {
+		if (pingroups[pg].vddio == vddio &&
+		    pingroups[pg].tri_reg >= 0) {
+			if (tegra_pinmux_set_tristate(pg, tristate)<0)
+				pr_err("pinmux: can't set pingroup %s tristate"
+				       " to %s\n", pingroup_name(pg),
+				       tri_name(tristate));
 		}
 	}
 }

@@ -464,5 +464,34 @@ config SPI_TLE62X0
 endif # SPI_MASTER
 
 # (slave support would go here)
+config SPI_SLAVE
+#      boolean "SPI Slave Support"
+       boolean
+       default SPI
+       help
+         Proveide SPI slave controller support
+
+if SPI_SLAVE
+
+comment "SPI Slave Controller Drivers"
+
+config SPI_SLAVE_TEGRA
+       boolean "SPI slave driver for NVIDIA Tegra SoCs"
+       depends on ARCH_TEGRA
+       help
+         Enables the integrated SPI slave controllers on NVIDIA Tegra SoCs
+
+#
+# Add new SPI slave controllers in alphabetical order above this line
+#
+
+comment "SPI Protocol Slaves"
+
+#
+# Add new SPI protocol masters in alphabetical order above this line
+#
+
+endif # SPI_SLAVE
+
 
 endif # SPI

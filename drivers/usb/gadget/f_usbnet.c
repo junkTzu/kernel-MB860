@@ -29,6 +29,8 @@
 #include <linux/inetdevice.h>
 #include <linux/uaccess.h>
 #include <linux/workqueue.h>
+#include <linux/usb/composite.h>
+#include <linux/sched.h>
 
 #include <linux/usb/ch9.h>
 #include <asm/cacheflush.h>

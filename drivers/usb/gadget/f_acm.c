@@ -17,10 +17,14 @@
 #include <linux/slab.h>
 #include <linux/kernel.h>
 #include <linux/device.h>
+#include <asm/termios.h>
+#include <linux/usb/android_composite.h>
 
 #include "u_serial.h"
 #include "gadget_chips.h"
-
+#ifdef CONFIG_USB_MOT_ANDROID
+#include "f_mot_android.h"
+#endif
 
 /*
  * This CDC ACM function support just wraps control functions and
@@ -92,6 +96,12 @@ static inline struct f_acm *port_to_acm(struct gserial *p)
 {
 	return container_of(p, struct f_acm, port);
 }
+
+#ifdef CONFIG_USB_MOT_ANDROID
+static struct f_acm *g_acm_dev;
+#endif
+
+static u8 use_iads;
 
 /*-------------------------------------------------------------------------*/
 
@@ -255,8 +265,13 @@ static struct usb_descriptor_header *acm_hs_function[] = {
 
 /* static strings, in UTF-8 */
 static struct usb_string acm_string_defs[] = {
+#ifdef CONFIG_USB_MOT_ANDROID
+	[ACM_CTRL_IDX].s = "Motorola Communication Interface",
+	[ACM_DATA_IDX].s = "Motorola Data Interface",
+#else
 	[ACM_CTRL_IDX].s = "CDC Abstract Control Model (ACM)",
 	[ACM_DATA_IDX].s = "CDC ACM Data",
+#endif
 	[ACM_IAD_IDX ].s = "CDC Serial",
 	{  /* ZEROES END LIST */ },
 };
@@ -427,6 +442,18 @@ static int acm_set_alt(struct usb_function *f, unsigned intf, unsigned alt)
 
 	} else
 		return -EINVAL;
+#ifdef CONFIG_USB_MOT_ANDROID
+	if (acm->port_num == 0)
+		usb_interface_enum_cb(ACM_TYPE_FLAG);
+	else if (acm->port_num == 1)
+		usb_interface_enum_cb(ACM1_TYPE_FLAG);
+	else if (acm->port_num == 2)
+		usb_interface_enum_cb(ACM2_TYPE_FLAG);
+	else if (acm->port_num == 3)
+		usb_interface_enum_cb(ACM3_TYPE_FLAG);
+	else
+		DBG(cdev, "Invalid port number = %d\n", acm->port_num);
+#endif
 
 	return 0;
 }
@@ -535,6 +562,58 @@ static void acm_cdc_notify_complete(struct usb_ep *ep, struct usb_request *req)
 	if (doit)
 		acm_notify_serial_state(acm);
 }
+
+#ifdef CONFIG_USB_MOT_ANDROID
+static int acm_tiocmset(struct gserial *port, int set, int clear)
+{
+	struct f_acm	*acm = port_to_acm(port);
+
+	if (set & TIOCM_DTR)
+		acm->serial_state |= ACM_CTRL_DCD;
+	if (clear & TIOCM_DTR)
+		acm->serial_state &= ~ACM_CTRL_DCD;
+
+	if (set & TIOCM_DSR)
+		acm->serial_state |= ACM_CTRL_DSR;
+	if (clear & TIOCM_DSR)
+		acm->serial_state &= ~ACM_CTRL_DSR;
+
+	if (set & TIOCM_OUT1)
+		acm->serial_state |= ACM_CTRL_RI;
+	if (clear & TIOCM_OUT1)
+		acm->serial_state &= ~ACM_CTRL_RI;
+
+	if (set & TIOCM_OUT2)
+		acm->serial_state |= ACM_CTRL_OVERRUN;
+	if (clear & TIOCM_OUT2)
+		acm->serial_state &= ~ACM_CTRL_OVERRUN;
+
+	/*
+	 *  TODO:  configure DSR/DCD/OUT1, etc according to set/clear
+	 */
+	return acm_notify_serial_state(acm);
+}
+
+static int acm_tiocmget(struct gserial *port)
+{
+	struct f_acm            *acm = port_to_acm(port);
+	unsigned int result = 0;
+
+	if (acm->port_handshake_bits & ACM_CTRL_DTR)
+		result |= TIOCM_DTR;
+
+	if (acm->port_handshake_bits & ACM_CTRL_RTS)
+		result |= TIOCM_RTS;
+
+	if (acm->serial_state & TIOCM_CD)
+		result |= TIOCM_CD;
+
+	if (acm->serial_state & TIOCM_RI)
+		result |= TIOCM_RI;
+
+	return result;
+}
+#endif
 
 /* connect == the TTY link is open */
 
@@ -782,8 +861,68 @@ int acm_bind_config(struct usb_configuration *c, u8 port_num)
 	acm->port.func.setup = acm_setup;
 	acm->port.func.disable = acm_disable;
 
+#ifdef CONFIG_USB_MOT_ANDROID
+	acm->port.tiocmset = acm_tiocmset;
+	acm->port.tiocmget = acm_tiocmget;
+	g_acm_dev = acm;
+#endif
+
 	status = usb_add_function(c, &acm->port.func);
 	if (status)
 		kfree(acm);
 	return status;
 }
+
+#if defined(CONFIG_USB_ANDROID_ACM) || defined(CONFIG_USB_MOT_ANDROID)
+#include <linux/platform_device.h>
+
+static struct acm_platform_data *acm_pdata;
+
+static int acm_probe(struct platform_device *pdev)
+{
+	acm_pdata = pdev->dev.platform_data;
+	/* Remove once all ACM including PIDs use IADs */
+	use_iads = acm_pdata->use_iads;
+	return 0;
+}
+
+static struct platform_driver acm_platform_driver = {
+	.driver = { .name = "acm", },
+	.probe = acm_probe,
+};
+
+int acm_function_bind_config(struct usb_configuration *c)
+{
+	int i;
+	u8 num_inst = acm_pdata ? acm_pdata->num_inst : 1;
+	int ret = gserial_setup(c->cdev->gadget, num_inst);
+
+	if (ret)
+		return ret;
+
+	for (i = 0; i < num_inst; i++) {
+		ret = acm_bind_config(c, i);
+		if (ret) {
+			pr_err("Could not bind acm%u config\n", i);
+			break;
+		}
+	}
+
+	return ret;
+}
+
+static struct android_usb_function acm_function = {
+	.name = "acm",
+	.bind_config = acm_function_bind_config,
+};
+
+static int __init init(void)
+{
+	printk(KERN_INFO "f_acm init\n");
+	platform_driver_register(&acm_platform_driver);
+	android_register_function(&acm_function);
+	return 0;
+}
+module_init(init);
+
+#endif /* CONFIG_USB_ANDROID_ACM || CONFIG_USB_MOT_ANDROID */

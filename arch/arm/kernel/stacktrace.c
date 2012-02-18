@@ -98,6 +98,14 @@ void save_stack_trace_tsk(struct task_struct *tsk, struct stack_trace *trace)
 		 * running on another CPU?  For now, ignore it as we
 		 * can't guarantee we won't explode.
 		 */
+		#ifdef CONFIG_MACH_MOT
+				if (cpu_online(1)) {
+					printk(KERN_INFO "save_stack_trace_tsk() called from unsafe SMP context\n");
+					return;
+				}
+		#else
+				BUG();
+		#endif
 		if (trace->nr_entries < trace->max_entries)
 			trace->entries[trace->nr_entries++] = ULONG_MAX;
 		return;

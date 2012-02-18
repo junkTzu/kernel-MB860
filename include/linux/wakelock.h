@@ -38,6 +38,9 @@ struct wake_lock {
 	int                 flags;
 	const char         *name;
 	unsigned long       expires;
+#ifdef CONFIG_PM_DEEPSLEEP
+	pid_t   pid;
+#endif
 #ifdef CONFIG_WAKELOCK_STAT
 	struct {
 		int             count;
@@ -72,6 +75,8 @@ int wake_lock_active(struct wake_lock *lock);
  * number of jiffies until all active wake locks time out.
  */
 long has_wake_lock(int type);
+
+void dump_active_lock_static(void);
 
 #else
 

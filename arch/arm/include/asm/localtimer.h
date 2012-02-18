@@ -30,6 +30,7 @@ asmlinkage void do_local_timer(struct pt_regs *);
 #include "smp_twd.h"
 
 #define local_timer_ack()	twd_timer_ack()
+#define local_timer_stop()	twd_timer_stop()
 
 #else
 

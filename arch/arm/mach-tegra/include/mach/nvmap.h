@@ -35,6 +35,7 @@
 
 /* common carveout heaps */
 #define NVMAP_HEAP_CARVEOUT_IRAM    (1ul<<29)
+#define NVMAP_HEAP_CARVEOUT_VPR     (1ul<<28)
 #define NVMAP_HEAP_CARVEOUT_GENERIC (1ul<<0)
 
 #define NVMAP_HEAP_CARVEOUT_MASK    (NVMAP_HEAP_IOVMM - 1)
@@ -64,6 +65,18 @@ struct nvmap_pinarray_elem {
 	__u32 patch_offset;
 	__u32 pin_mem;
 	__u32 pin_offset;
+	__u32 reloc_shift;
+};
+
+/* handle_ref objects are client-local references to an nvmap_handle;
+ * they are distinct objects so that handles can be unpinned and
+ * unreferenced the correct number of times when a client abnormally
+ * terminates */
+struct nvmap_handle_ref {
+	struct nvmap_handle *handle;
+	struct rb_node	node;
+	atomic_t	dupes;	/* number of times to free on file close */
+	atomic_t	pin;	/* number of times to unpin on free */
 };
 
 struct nvmap_client *nvmap_create_client(struct nvmap_device *dev,
@@ -84,9 +97,9 @@ struct nvmap_client *nvmap_client_get(struct nvmap_client *client);
 
 void nvmap_client_put(struct nvmap_client *c);
 
-unsigned long nvmap_pin(struct nvmap_client *c, struct nvmap_handle_ref *r);
+phys_addr_t nvmap_pin(struct nvmap_client *c, struct nvmap_handle_ref *r);
 
-unsigned long nvmap_handle_address(struct nvmap_client *c, unsigned long id);
+phys_addr_t nvmap_handle_address(struct nvmap_client *c, unsigned long id);
 
 void nvmap_unpin(struct nvmap_client *client, struct nvmap_handle_ref *r);
 

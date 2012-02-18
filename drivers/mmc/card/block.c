@@ -734,6 +734,41 @@ static const struct mmc_fixup blk_fixups[] =
 	END_FIXUP
 };
 
+#if defined(CONFIG_MACH_MOT) && defined(CONFIG_APANIC_MMC)
+static int mmc_apanic_annotate(struct mmc_blk_data *md, struct mmc_card *card)
+{
+	char cap_str[10];
+	char manf_str[8] = "Unknown";
+	char ident[80];
+	static bool once = true;
+
+	string_get_size((u64)get_capacity(md->disk) << 9, STRING_UNITS_2,
+			cap_str, sizeof(cap_str));
+
+	switch (card->cid.manfid) {
+	case 0x02:
+	case 0x45:
+		strcpy(manf_str, "Sandisk");
+		break;
+	case 0x11:
+		strcpy(manf_str, "Toshiba");
+		break;
+	}
+
+	snprintf(ident, 80, "%s: %s %s %s %s %s\n",
+		md->disk->disk_name, mmc_card_id(card), manf_str,
+		mmc_card_name(card), cap_str, md->read_only ? "(ro)" : "");
+
+	printk(KERN_INFO "%s", ident);
+
+	if (once) {
+		once = false;
+		return apanic_annotate(ident);
+	} else
+		return 0;
+}
+#endif
+
 static int mmc_blk_probe(struct mmc_card *card)
 {
 	struct mmc_blk_data *md;
@@ -756,9 +791,13 @@ static int mmc_blk_probe(struct mmc_card *card)
 
 	string_get_size((u64)get_capacity(md->disk) << 9, STRING_UNITS_2,
 			cap_str, sizeof(cap_str));
+#if defined(CONFIG_MACH_MOT) && defined(CONFIG_APANIC_MMC)
+	mmc_apanic_annotate(md, card);
+#else
 	printk(KERN_INFO "%s: %s %s %s %s\n",
 		md->disk->disk_name, mmc_card_id(card), mmc_card_name(card),
 		cap_str, md->read_only ? "(ro)" : "");
+#endif
 
 	mmc_set_drvdata(card, md);
 	mmc_fixup_device(card, blk_fixups);

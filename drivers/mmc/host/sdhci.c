@@ -923,7 +923,20 @@ static void sdhci_send_command(struct sdhci_host *host, struct mmc_command *cmd)
 
 	sdhci_prepare_data(host, cmd->data);
 
+#ifdef CONFIG_EMBEDDED_MMC_START_OFFSET
+	if (cmd->data ||
+	   (cmd->opcode == MMC_ERASE_GROUP_START) ||
+	   (cmd->opcode == MMC_ERASE_GROUP_END)) {
+		unsigned long offset = host->start_offset;
+		if (likely(mmc_card_blockaddr(host->mmc->card)))
+			offset >>= 9;
+		sdhci_writel(host, cmd->arg + offset, SDHCI_ARGUMENT);
+	} else {
+		sdhci_writel(host, cmd->arg, SDHCI_ARGUMENT);
+	}
+#else
 	sdhci_writel(host, cmd->arg, SDHCI_ARGUMENT);
+#endif
 
 	sdhci_set_transfer_mode(host, cmd->data);
 
@@ -1285,11 +1298,22 @@ out:
 	spin_unlock_irqrestore(&host->lock, flags);
 }
 
+#ifdef CONFIG_EMBEDDED_MMC_START_OFFSET
+static unsigned int sdhci_get_host_offset(struct mmc_host *mmc) {
+	struct sdhci_host *host;
+	host = mmc_priv(mmc);
+	return host->start_offset;
+}
+#endif
+
 static const struct mmc_host_ops sdhci_ops = {
 	.request	= sdhci_request,
 	.set_ios	= sdhci_set_ios,
 	.get_ro		= sdhci_get_ro,
 	.enable_sdio_irq = sdhci_enable_sdio_irq,
+#ifdef CONFIG_EMBEDDED_MMC_START_OFFSET
+	.get_host_offset = sdhci_get_host_offset,
+#endif
 };
 
 /*****************************************************************************\
@@ -1909,6 +1933,16 @@ int sdhci_add_host(struct sdhci_host *host)
 	    mmc_card_is_removable(mmc))
 		mmc->caps |= MMC_CAP_NEEDS_POLL;
 
+#ifdef CONFIG_MACH_MOT
+	if (!mmc->ocr_avail) {
+		if (caps & SDHCI_CAN_VDD_330)
+			mmc->ocr_avail |= MMC_VDD_32_33|MMC_VDD_33_34;
+		if (caps & SDHCI_CAN_VDD_300)
+			mmc->ocr_avail |= MMC_VDD_29_30|MMC_VDD_30_31;
+		if (caps & SDHCI_CAN_VDD_180)
+			mmc->ocr_avail |= MMC_VDD_165_195;
+	}
+#else
 	ocr_avail = 0;
 	if (caps & SDHCI_CAN_VDD_330)
 		ocr_avail |= MMC_VDD_32_33 | MMC_VDD_33_34;
@@ -1916,6 +1950,7 @@ int sdhci_add_host(struct sdhci_host *host)
 		ocr_avail |= MMC_VDD_29_30 | MMC_VDD_30_31;
 	if (caps & SDHCI_CAN_VDD_180)
 		ocr_avail |= MMC_VDD_165_195;
+#endif
 
 	mmc->ocr_avail = ocr_avail;
 	mmc->ocr_avail_sdio = ocr_avail;
@@ -2127,6 +2162,19 @@ void sdhci_free_host(struct sdhci_host *host)
 }
 
 EXPORT_SYMBOL_GPL(sdhci_free_host);
+
+// Needed for Tegra SDHCI drivers
+void sdhci_card_detect(struct sdhci_host *host)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&host->lock, flags);
+
+	tasklet_schedule(&host->card_tasklet);
+
+	spin_unlock_irqrestore(&host->lock, flags);
+}
+EXPORT_SYMBOL_GPL(sdhci_card_detect);
 
 /*****************************************************************************\
  *                                                                           *

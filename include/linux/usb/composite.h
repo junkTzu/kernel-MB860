@@ -36,7 +36,16 @@
 
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
+#include <linux/switch.h>
 
+/*
+ * USB function drivers should return USB_GADGET_DELAYED_STATUS if they
+ * wish to delay the data/status stages of the control transfer till they
+ * are ready. The control transfer will then be kept from completing till
+ * all the function drivers that requested for USB_GADGET_DELAYED_STAUS
+ * invoke usb_composite_setup_continue().
+ */
+#define USB_GADGET_DELAYED_STATUS       0x7fff	/* Impossibly large value */
 
 struct usb_configuration;
 
@@ -101,6 +110,9 @@ struct usb_function {
 
 	struct usb_configuration	*config;
 
+	/* disabled is zero if the function is enabled */
+	int                             disabled;
+
 	/* REVISIT:  bind() functions can be marked __init, which
 	 * makes trouble for section mismatch analysis.  See if
 	 * we can't restructure things to avoid mismatching.
@@ -127,6 +139,7 @@ struct usb_function {
 	/* private: */
 	/* internals */
 	struct list_head		list;
+	struct device			*dev;
 	DECLARE_BITMAP(endpoints, 32);
 };
 
@@ -283,11 +296,13 @@ struct usb_composite_driver {
 	/* global suspend hooks */
 	void			(*suspend)(struct usb_composite_dev *);
 	void			(*resume)(struct usb_composite_dev *);
+	void			(*enable_function)(struct usb_function *f, int enable);
 };
 
 extern int usb_composite_probe(struct usb_composite_driver *driver,
 			       int (*bind)(struct usb_composite_dev *cdev));
 extern void usb_composite_unregister(struct usb_composite_driver *driver);
+extern void usb_composite_setup_continue(struct usb_composite_dev *cdev);
 
 
 /**
@@ -345,15 +360,24 @@ struct usb_composite_dev {
 	 */
 	unsigned			deactivations;
 
-	/* protects at least deactivation count */
+	/* the composite driver won't complete the control transfer's
+	 * data/status stages till delayed_status is zero.
+	 */
+	int					delayed_status;
+	/* used by usb_composite_force_reset to avoid signalling switch changes */
+	bool            	mute_switch;
+	/* protects deactivations and delayed_status counts*/
 	spinlock_t			lock;
+	struct switch_dev 	sdev;
 };
 
 extern int usb_string_id(struct usb_composite_dev *c);
 extern int usb_string_ids_tab(struct usb_composite_dev *c,
 			      struct usb_string *str);
 extern int usb_string_ids_n(struct usb_composite_dev *c, unsigned n);
-
+void usb_composite_force_reset(struct usb_composite_dev *);
+void usb_function_set_enabled(struct usb_function *, int);
+extern int usb_composite_register(struct usb_composite_driver *);
 
 /* messaging utils */
 #define DBG(d, fmt, args...) \

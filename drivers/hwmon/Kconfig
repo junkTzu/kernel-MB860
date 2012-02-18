@@ -1303,4 +1303,11 @@ config SENSORS_ATK0110
 
 endif # ACPI
 
+config SENSORS_TEGRA_TMON
+	bool "Nvidia Tegra Soc temp monitor support"
+	depends on ARCH_TEGRA
+	default n
+	help
+	  This driver provides support for the Nvidia Tegra odm_kit tmon device.
+
 endif # HWMON

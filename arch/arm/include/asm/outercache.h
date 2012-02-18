@@ -30,6 +30,8 @@ struct outer_cache_fns {
 	void (*flush_all)(void);
 	void (*inv_all)(void);
 	void (*disable)(void);
+	void (*shutdown)(void);
+	void (*restart)(void);
 #ifdef CONFIG_OUTER_CACHE_SYNC
 	void (*sync)(void);
 #endif
@@ -74,6 +76,18 @@ static inline void outer_disable(void)
 		outer_cache.disable();
 }
 
+static inline void outer_shutdown(void)
+{
+	if (outer_cache.shutdown)
+		outer_cache.shutdown();
+}
+
+static inline void outer_restart(void)
+{
+	if (outer_cache.restart)
+		outer_cache.restart();
+}
+
 #else
 
 static inline void outer_inv_range(phys_addr_t start, phys_addr_t end)
@@ -85,7 +99,8 @@ static inline void outer_flush_range(phys_addr_t start, phys_addr_t end)
 static inline void outer_flush_all(void) { }
 static inline void outer_inv_all(void) { }
 static inline void outer_disable(void) { }
-
+static inline void outer_shutdown(void) { }
+static inline void outer_restart(void) { }
 #endif
 
 #ifdef CONFIG_OUTER_CACHE_SYNC

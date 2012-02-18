@@ -21,6 +21,8 @@
 #define __MACH_TEGRA_DC_H
 
 #include <linux/pm.h>
+#include <linux/types.h>
+#include <drm/drm_fixed.h>
 
 #define TEGRA_MAX_DC		2
 #define DC_N_WINDOWS		3
@@ -37,6 +39,7 @@ struct tegra_dc_mode {
 	int	v_active;
 	int	h_front_porch;
 	int	v_front_porch;
+	int	stereo_mode;
 	u32	flags;
 };
 
@@ -46,6 +49,108 @@ struct tegra_dc_mode {
 enum {
 	TEGRA_DC_OUT_RGB,
 	TEGRA_DC_OUT_HDMI,
+	TEGRA_DC_OUT_DSI,
+};
+
+struct tegra_dc_out_pin {
+	int	name;
+	int	pol;
+};
+
+enum {
+	TEGRA_DC_OUT_PIN_DATA_ENABLE,
+	TEGRA_DC_OUT_PIN_H_SYNC,
+	TEGRA_DC_OUT_PIN_V_SYNC,
+	TEGRA_DC_OUT_PIN_PIXEL_CLOCK,
+};
+
+enum {
+	TEGRA_DC_OUT_PIN_POL_LOW,
+	TEGRA_DC_OUT_PIN_POL_HIGH,
+};
+
+enum {
+	TEGRA_DC_DISABLE_DITHER = 1,
+	TEGRA_DC_ORDERED_DITHER,
+	TEGRA_DC_ERRDIFF_DITHER,
+};
+
+typedef u8 tegra_dc_bl_output[256];
+typedef u8 *p_tegra_dc_bl_output;
+
+struct tegra_dc_sd_blp {
+	u16 time_constant;
+	u8 step;
+};
+
+struct tegra_dc_sd_fc {
+	u8 time_limit;
+	u8 threshold;
+};
+
+struct tegra_dc_sd_rgb {
+	u8 r;
+	u8 g;
+	u8 b;
+};
+
+struct tegra_dc_sd_agg_priorities {
+	u8 pri_lvl;
+	u8 agg[4];
+};
+
+struct tegra_dc_sd_settings {
+	unsigned enable;
+	bool use_auto_pwm;
+	u8 hw_update_delay;
+	u8 aggressiveness;
+	short bin_width;
+	u8 phase_in_settings;
+	u8 phase_in_adjustments;
+	u8 cmd;
+	u8 final_agg;
+	u16 cur_agg_step;
+	u16 phase_settings_step;
+	u16 phase_adj_step;
+	u16 num_phase_in_steps;
+
+	struct tegra_dc_sd_agg_priorities agg_priorities;
+
+	bool use_vid_luma;
+	struct tegra_dc_sd_rgb coeff;
+
+	struct tegra_dc_sd_fc fc;
+	struct tegra_dc_sd_blp blp;
+	u8 bltf[4][4][4];
+	struct tegra_dc_sd_rgb lut[4][9];
+
+	atomic_t *sd_brightness;
+	struct platform_device *bl_device;
+};
+
+enum {
+	NO_CMD = 0x0,
+	ENABLE = 0x1,
+	DISABLE = 0x2,
+	PHASE_IN = 0x4,
+	AGG_CHG = 0x8,
+};
+
+enum {
+	TEGRA_PIN_OUT_CONFIG_SEL_LHP0_LD21,
+	TEGRA_PIN_OUT_CONFIG_SEL_LHP1_LD18,
+	TEGRA_PIN_OUT_CONFIG_SEL_LHP2_LD19,
+	TEGRA_PIN_OUT_CONFIG_SEL_LVP0_LVP0_Out,
+	TEGRA_PIN_OUT_CONFIG_SEL_LVP1_LD20,
+
+	TEGRA_PIN_OUT_CONFIG_SEL_LM1_M1,
+	TEGRA_PIN_OUT_CONFIG_SEL_LM1_LD21,
+	TEGRA_PIN_OUT_CONFIG_SEL_LM1_PM1,
+
+	TEGRA_PIN_OUT_CONFIG_SEL_LDI_LD22,
+	TEGRA_PIN_OUT_CONFIG_SEL_LPP_LD23,
+	TEGRA_PIN_OUT_CONFIG_SEL_LDC_SDC,
+	TEGRA_PIN_OUT_CONFIG_SEL_LSPI_DE,
 };
 
 struct tegra_dc_out {
@@ -90,6 +195,24 @@ struct tegra_dc_out {
 struct tegra_dc;
 struct nvmap_handle_ref;
 
+struct tegra_dc_csc {
+	unsigned short yof;
+	unsigned short kyrgb;
+	unsigned short kur;
+	unsigned short kvr;
+	unsigned short kug;
+	unsigned short kvg;
+	unsigned short kub;
+	unsigned short kvb;
+};
+
+/* palette lookup table */
+struct tegra_dc_lut {
+	u8 r[256];
+	u8 g[256];
+	u8 b[256];
+};
+
 struct tegra_dc_win {
 	u8			idx;
 	u8			fmt;
@@ -97,14 +220,16 @@ struct tegra_dc_win {
 
 	void			*virt_addr;
 	dma_addr_t		phys_addr;
+	dma_addr_t		phys_addr_u;
+	dma_addr_t		phys_addr_v;
 	unsigned		offset_u;
 	unsigned		offset_v;
 	unsigned		stride;
 	unsigned		stride_uv;
-	unsigned		x;
-	unsigned		y;
-	unsigned		w;
-	unsigned		h;
+	fixed20_12		x;
+	fixed20_12		y;
+	fixed20_12		w;
+	fixed20_12		h;
 	unsigned		out_x;
 	unsigned		out_y;
 	unsigned		out_w;
@@ -179,6 +304,8 @@ struct tegra_dc_platform_data {
 struct tegra_dc *tegra_dc_get_dc(unsigned idx);
 struct tegra_dc_win *tegra_dc_get_window(struct tegra_dc *dc, unsigned win);
 
+void tegra_dc_blank(struct tegra_dc *dc);
+
 void tegra_dc_enable(struct tegra_dc *dc);
 void tegra_dc_disable(struct tegra_dc *dc);
 
@@ -194,7 +321,51 @@ int tegra_dc_sync_windows(struct tegra_dc_win *windows[], int n);
 
 int tegra_dc_set_mode(struct tegra_dc *dc, const struct tegra_dc_mode *mode);
 
-unsigned tegra_dc_get_out_height(struct tegra_dc *dc);
-unsigned tegra_dc_get_out_width(struct tegra_dc *dc);
+struct fb_videomode;
+int tegra_dc_set_fb_mode(struct tegra_dc *dc, const struct fb_videomode *fbmode,
+	bool stereo_mode);
+
+unsigned tegra_dc_get_out_height(const struct tegra_dc *dc);
+unsigned tegra_dc_get_out_width(const struct tegra_dc *dc);
+unsigned tegra_dc_get_out_max_pixclock(const struct tegra_dc *dc);
+
+/* PM0 and PM1 signal control */
+#define TEGRA_PWM_PM0 0
+#define TEGRA_PWM_PM1 1
+
+struct tegra_dc_pwm_params {
+	int which_pwm;
+	void (*switch_to_sfio)(int);
+	int gpio_conf_to_sfio;
+	unsigned int period;
+	unsigned int clk_div;
+	unsigned int clk_select;
+	unsigned int duty_cycle;
+};
+
+void tegra_dc_config_pwm(struct tegra_dc *dc, struct tegra_dc_pwm_params *cfg);
+
+int tegra_dsi_send_panel_short_cmd(struct tegra_dc *dc, u8 *pdata, u8 data_len);
+
+int tegra_dc_update_csc(struct tegra_dc *dc, int win_index);
+
+int tegra_dc_update_lut(struct tegra_dc *dc, int win_index, int fboveride);
+
+/*
+ * In order to get a dc's current EDID, first call tegra_dc_get_edid() from an
+ * interruptible context.  The returned value (if non-NULL) points to a
+ * snapshot of the current state; after copying data from it, call
+ * tegra_dc_put_edid() on that pointer.  Do not dereference anything through
+ * that pointer after calling tegra_dc_put_edid().
+ */
+struct tegra_dc_edid {
+	size_t		len;
+	u8		buf[0];
+};
+struct tegra_dc_edid *tegra_dc_get_edid(struct tegra_dc *dc);
+void tegra_dc_put_edid(struct tegra_dc_edid *edid);
+
+/*unsigned tegra_dc_get_out_height(struct tegra_dc *dc);
+unsigned tegra_dc_get_out_width(struct tegra_dc *dc);*/
 
 #endif

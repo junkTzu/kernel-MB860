@@ -20,6 +20,9 @@ struct machine_desc {
 	unsigned long		boot_params;	/* tagged list		*/
 
 	unsigned int		nr_irqs;	/* number of IRQs */
+	unsigned int		phys_io;	/* start of physical io	*/
+	unsigned int		io_pg_offst;/* byte offset for io
+						 	 	 	 * page tabe entry	*/
 
 	unsigned int		video_start;	/* start of video RAM	*/
 	unsigned int		video_end;	/* end of video RAM	*/

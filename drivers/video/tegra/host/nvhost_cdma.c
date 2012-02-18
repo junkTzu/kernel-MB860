@@ -21,7 +21,7 @@
  */
 
 #include "nvhost_cdma.h"
-#include "dev.h"
+#include "nvhost_dev.h"
 #include <asm/cacheflush.h>
 
 /*
@@ -34,8 +34,6 @@
 
 #define cdma_to_channel(cdma) container_of(cdma, struct nvhost_channel, cdma)
 #define cdma_to_dev(cdma) ((cdma_to_channel(cdma))->dev)
-#define cdma_to_nvmap(cdma) ((cdma_to_dev(cdma))->nvmap)
-#define pb_to_cdma(pb) container_of(pb, struct nvhost_cdma, push_buffer)
 
 /*
  * push_buffer
@@ -64,30 +62,21 @@ static void reset_push_buffer(struct push_buffer *pb)
  */
 static int init_push_buffer(struct push_buffer *pb)
 {
-	struct nvhost_cdma *cdma = pb_to_cdma(pb);
-	struct nvmap_client *nvmap = cdma_to_nvmap(cdma);
 	pb->mem = NULL;
 	pb->mapped = NULL;
 	pb->phys = 0;
 	reset_push_buffer(pb);
 
 	/* allocate and map pushbuffer memory */
-	pb->mem = nvmap_alloc(nvmap, PUSH_BUFFER_SIZE + 4, 32,
-			      NVMAP_HANDLE_WRITE_COMBINE);
+	pb->mem = nvmap_alloc(PUSH_BUFFER_SIZE + 4, 32,
+			NVMEM_HANDLE_WRITE_COMBINE, (void**)&pb->mapped);
 	if (IS_ERR_OR_NULL(pb->mem)) {
 		pb->mem = NULL;
 		goto fail;
 	}
-	pb->mapped = nvmap_mmap(pb->mem);
-	if (pb->mapped == NULL)
-		goto fail;
 
 	/* pin pushbuffer and get physical address */
-	pb->phys = nvmap_pin(nvmap, pb->mem);
-	if (pb->phys >= 0xfffff000) {
-		pb->phys = 0;
-		goto fail;
-	}
+	pb->phys = nvmap_pin_single(pb->mem);
 
 	/* put the restart at the end of pushbuffer memory */
 	*(pb->mapped + (PUSH_BUFFER_SIZE >> 2)) = nvhost_opcode_restart(pb->phys);
@@ -104,20 +93,16 @@ fail:
  */
 static void destroy_push_buffer(struct push_buffer *pb)
 {
-	struct nvhost_cdma *cdma = pb_to_cdma(pb);
-	struct nvmap_client *nvmap = cdma_to_nvmap(cdma);
-	if (pb->mapped)
-		nvmap_munmap(pb->mem, pb->mapped);
+	if (pb->mem) {
+		if (pb->phys != 0) {
+			nvmap_unpin(&pb->mem, 1);
+			pb->phys = 0;
+		}
 
-	if (pb->phys != 0)
-		nvmap_unpin(nvmap, pb->mem);
-
-	if (pb->mem)
-		nvmap_free(nvmap, pb->mem);
-
-	pb->mem = NULL;
-	pb->mapped = NULL;
-	pb->phys = 0;
+		nvmap_free(pb->mem, pb->mapped);
+		pb->mem = NULL;
+		pb->mapped = NULL;
+	}
 }
 
 /**
@@ -165,8 +150,7 @@ static u32 push_buffer_putptr(struct push_buffer *pb)
  *   1: SyncPointValue
  *   2: NumSlots (how many pushbuffer slots to free)
  *   3: NumHandles
- *   4: nvmap client which pinned the handles
- *   5..: NumHandles * nvmemhandle to unpin
+ *   4..: NumHandles * nvmemhandle to unpin
  *
  * There's always one word unused, so (accounting for wrap):
  *   - Write == Read => queue empty
@@ -180,7 +164,7 @@ static u32 push_buffer_putptr(struct push_buffer *pb)
  */
 
 /* Number of words needed to store an entry containing one handle */
-#define SYNC_QUEUE_MIN_ENTRY (4 + (2 * sizeof(void *) / sizeof(u32)))
+#define SYNC_QUEUE_MIN_ENTRY 5
 
 /**
  * Reset to empty queue.
@@ -241,16 +225,14 @@ static unsigned int sync_queue_space(struct sync_queue *queue)
 /**
  * Add an entry to the sync queue.
  */
-#define entry_size(_cnt)	((1 + _cnt)*sizeof(void *)/sizeof(u32))
-
 static void add_to_sync_queue(struct sync_queue *queue,
-			      u32 sync_point_id, u32 sync_point_value,
-			      u32 nr_slots, struct nvmap_client *user_nvmap,
-			      struct nvmap_handle **handles, u32 nr_handles)
+			u32 sync_point_id, u32 sync_point_value,
+			u32 nr_slots,
+			struct nvmap_handle **handles, u32 nr_handles)
 {
 	u32 write = queue->write;
 	u32 *p = queue->buffer + write;
-	u32 size = 4 + (entry_size(nr_handles));
+	u32 size = 4 + nr_handles;
 
 	BUG_ON(sync_point_id == NVSYNCPT_INVALID);
 	BUG_ON(sync_queue_space(queue) < nr_handles);
@@ -262,13 +244,8 @@ static void add_to_sync_queue(struct sync_queue *queue,
 	*p++ = sync_point_value;
 	*p++ = nr_slots;
 	*p++ = nr_handles;
-	BUG_ON(!user_nvmap);
-	*(struct nvmap_client **)p = nvmap_client_get(user_nvmap);
-
-	p = (u32 *)((void *)p + sizeof(struct nvmap_client *));
-
 	if (nr_handles)
-		memcpy(p, handles, nr_handles * sizeof(struct nvmap_handle *));
+		memcpy(p, handles, nr_handles*sizeof(struct nvmap_handle *));
 
 	/* If there's not enough room for another entry, wrap to the start. */
 	if ((write + SYNC_QUEUE_MIN_ENTRY) > NVHOST_SYNC_QUEUE_SIZE) {
@@ -311,7 +288,7 @@ dequeue_sync_queue_head(struct sync_queue *queue)
 
 	BUG_ON(read == queue->write);
 
-	size = 4 + entry_size(queue->buffer[read + 3]);
+	size = 4 + queue->buffer[read + 3];
 
 	read += size;
 	BUG_ON(read > NVHOST_SYNC_QUEUE_SIZE);
@@ -325,6 +302,37 @@ dequeue_sync_queue_head(struct sync_queue *queue)
 
 
 /*** Cdma internal stuff ***/
+
+/**
+ * Start channel DMA
+ */
+static void start_cdma(struct nvhost_cdma *cdma)
+{
+	void __iomem *chan_regs = cdma_to_channel(cdma)->aperture;
+
+	if (cdma->running)
+		return;
+
+	cdma->last_put = push_buffer_putptr(&cdma->push_buffer);
+
+	writel(nvhost_channel_dmactrl(true, false, false),
+		chan_regs + HOST1X_CHANNEL_DMACTRL);
+
+	/* set base, put, end pointer (all of memory) */
+	writel(0, chan_regs + HOST1X_CHANNEL_DMASTART);
+	writel(cdma->last_put, chan_regs + HOST1X_CHANNEL_DMAPUT);
+	writel(0xFFFFFFFF, chan_regs + HOST1X_CHANNEL_DMAEND);
+
+	/* reset GET */
+	writel(nvhost_channel_dmactrl(true, true, true),
+		chan_regs + HOST1X_CHANNEL_DMACTRL);
+
+	/* start the command DMA */
+	writel(nvhost_channel_dmactrl(false, false, false),
+		chan_regs + HOST1X_CHANNEL_DMACTRL);
+
+	cdma->running = true;
+}
 
 /**
  * Kick channel DMA into action by writing its PUT offset (if it has changed)
@@ -399,7 +407,7 @@ static unsigned int wait_cdma(struct nvhost_cdma *cdma, enum cdma_event event)
 static void update_cdma(struct nvhost_cdma *cdma)
 {
 	bool signal = false;
-	struct nvhost_master *dev = cdma_to_dev(cdma);
+	struct nvhost_dev *dev = cdma_to_dev(cdma);
 
 	BUG_ON(!cdma->running);
 
@@ -411,7 +419,6 @@ static void update_cdma(struct nvhost_cdma *cdma)
 		u32 syncpt_id, syncpt_val;
 		unsigned int nr_slots, nr_handles;
 		struct nvmap_handle **handles;
-		struct nvmap_client *nvmap;
 		u32 *sync;
 
 		sync = sync_queue_head(&cdma->sync_queue);
@@ -421,8 +428,8 @@ static void update_cdma(struct nvhost_cdma *cdma)
 			break;
 		}
 
-		syncpt_id = *sync++;
-		syncpt_val = *sync++;
+		syncpt_id = sync[0];
+		syncpt_val = sync[1];
 
 		BUG_ON(syncpt_id == NVSYNCPT_INVALID);
 
@@ -430,18 +437,13 @@ static void update_cdma(struct nvhost_cdma *cdma)
 		if (!nvhost_syncpt_min_cmp(&dev->syncpt, syncpt_id, syncpt_val))
 			break;
 
-		nr_slots = *sync++;
-		nr_handles = *sync++;
-		nvmap = *(struct nvmap_client **)sync;
-		sync = ((void *)sync + sizeof(struct nvmap_client *));
-		handles = (struct nvmap_handle **)sync;
-
-		BUG_ON(!nvmap);
+		nr_slots = sync[2];
+		nr_handles = sync[3];
+		handles = (struct nvmap_handle **)(sync + 4);
 
 		/* Unpin the memory */
-		nvmap_unpin_handles(nvmap, handles, nr_handles);
-
-		nvmap_client_put(nvmap);
+		if (nr_handles)
+			nvmap_unpin(handles, nr_handles);
 
 		/* Pop push buffer slots */
 		if (nr_slots) {
@@ -487,35 +489,6 @@ void nvhost_cdma_deinit(struct nvhost_cdma *cdma)
 {
 	BUG_ON(cdma->running);
 	destroy_push_buffer(&cdma->push_buffer);
-}
-
-static void start_cdma(struct nvhost_cdma *cdma)
-{
-	void __iomem *chan_regs = cdma_to_channel(cdma)->aperture;
-
-	if (cdma->running)
-		return;
-
-	cdma->last_put = push_buffer_putptr(&cdma->push_buffer);
-
-	writel(nvhost_channel_dmactrl(true, false, false),
-		chan_regs + HOST1X_CHANNEL_DMACTRL);
-
-	/* set base, put, end pointer (all of memory) */
-	writel(0, chan_regs + HOST1X_CHANNEL_DMASTART);
-	writel(cdma->last_put, chan_regs + HOST1X_CHANNEL_DMAPUT);
-	writel(0xFFFFFFFF, chan_regs + HOST1X_CHANNEL_DMAEND);
-
-	/* reset GET */
-	writel(nvhost_channel_dmactrl(true, true, true),
-		chan_regs + HOST1X_CHANNEL_DMACTRL);
-
-	/* start the command DMA */
-	writel(nvhost_channel_dmactrl(false, false, false),
-		chan_regs + HOST1X_CHANNEL_DMACTRL);
-
-	cdma->running = true;
-
 }
 
 void nvhost_cdma_stop(struct nvhost_cdma *cdma)
@@ -568,9 +541,9 @@ void nvhost_cdma_push(struct nvhost_cdma *cdma, u32 op1, u32 op2)
  * The handles for a submit must all be pinned at the same time, but they
  * can be unpinned in smaller chunks.
  */
-void nvhost_cdma_end(struct nvmap_client *user_nvmap, struct nvhost_cdma *cdma,
-		     u32 sync_point_id, u32 sync_point_value,
-		     struct nvmap_handle **handles, unsigned int nr_handles)
+void nvhost_cdma_end(struct nvhost_cdma *cdma,
+	u32 sync_point_id, u32 sync_point_value,
+	struct nvmap_handle **handles, unsigned int nr_handles)
 {
 	kick_cdma(cdma);
 
@@ -582,15 +555,12 @@ void nvhost_cdma_end(struct nvmap_client *user_nvmap, struct nvhost_cdma *cdma,
 		 */
 		count = wait_cdma(cdma, CDMA_EVENT_SYNC_QUEUE_SPACE);
 
-		/*
-		 * Add reloc entries to sync queue (as many as will fit)
-		 * and unlock it
-		 */
+		/* Add reloc entries to sync queue (as many as will fit) */
 		if (count > nr_handles)
 			count = nr_handles;
-		add_to_sync_queue(&cdma->sync_queue, sync_point_id,
-				  sync_point_value, cdma->slots_used,
-				  user_nvmap, handles, count);
+		add_to_sync_queue(&cdma->sync_queue,
+				sync_point_id, sync_point_value,
+				cdma->slots_used, handles, count);
 		/* NumSlots only goes in the first packet */
 		cdma->slots_used = 0;
 		handles += count;
@@ -624,25 +594,4 @@ void nvhost_cdma_flush(struct nvhost_cdma *cdma)
 		mutex_lock(&cdma->lock);
 	}
 	mutex_unlock(&cdma->lock);
-}
-
-/**
- * Find the currently executing gather in the push buffer and return
- * its physical address and size.
- */
-void nvhost_cdma_find_gather(struct nvhost_cdma *cdma, u32 dmaget, u32 *addr, u32 *size)
-{
-	u32 offset = dmaget - cdma->push_buffer.phys;
-
-	*addr = *size = 0;
-
-	if (offset >= 8 && offset < cdma->push_buffer.cur) {
-		u32 *p = cdma->push_buffer.mapped + (offset - 8) / 4;
-
-		/* Make sure we have a gather */
-		if ((p[0] >> 28) == 6) {
-			*addr = p[1];
-			*size = p[0] & 0x3fff;
-		}
-	}
 }

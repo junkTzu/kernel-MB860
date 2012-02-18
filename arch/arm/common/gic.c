@@ -339,6 +339,14 @@ static void __init gic_dist_init(struct gic_chip_data *gic,
 	writel(1, base + GIC_DIST_CTRL);
 }
 
+void gic_dist_exit(unsigned int gic_nr)
+{
+	if (gic_nr >= MAX_GIC_NR)
+		BUG();
+
+	writel(0, gic_data[gic_nr].dist_base + GIC_DIST_CTRL);
+}
+
 static void __cpuinit gic_cpu_init(struct gic_chip_data *gic)
 {
 	void __iomem *dist_base = gic->dist_base;
@@ -361,6 +369,15 @@ static void __cpuinit gic_cpu_init(struct gic_chip_data *gic)
 	writel(0xf0, base + GIC_CPU_PRIMASK);
 	writel(1, base + GIC_CPU_CTRL);
 }
+
+void gic_cpu_exit(unsigned int gic_nr)
+{
+	if (gic_nr >= MAX_GIC_NR)
+		BUG();
+
+	writel(0, gic_data[gic_nr].cpu_base + GIC_CPU_CTRL);
+}
+
 
 /*
  * Saves the GIC distributor registers during suspend or idle.  Must be called
@@ -409,7 +426,7 @@ static void gic_dist_save(unsigned int gic_nr)
  * handled normally, but any edge interrupts that occured will not be seen by
  * the GIC and need to be handled by the platform-specific wakeup source.
  */
-static void gic_dist_restore(unsigned int gic_nr)
+void gic_dist_restore(unsigned int gic_nr)
 {
 	unsigned int gic_irqs;
 	unsigned int i;

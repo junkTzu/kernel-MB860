@@ -144,6 +144,10 @@ int tegra_dma_dequeue_req(struct tegra_dma_channel *ch,
 	struct tegra_dma_req *req);
 void tegra_dma_flush(struct tegra_dma_channel *ch);
 
+//Legacy compatibility code
+unsigned int tegra_dma_transferred_req(struct tegra_dma_channel *ch,
+	struct tegra_dma_req *req);
+
 bool tegra_dma_is_req_inflight(struct tegra_dma_channel *ch,
 	struct tegra_dma_req *req);
 bool tegra_dma_is_empty(struct tegra_dma_channel *ch);

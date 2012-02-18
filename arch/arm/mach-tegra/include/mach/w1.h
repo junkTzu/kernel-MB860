@@ -79,6 +79,8 @@ struct tegra_w1_timings {
 struct tegra_w1_platform_data {
 	const char *clk_id;
 	struct tegra_w1_timings *timings;
+	//Legacy pinmux code...
+	unsigned int pinmux;
 };
 
 #endif

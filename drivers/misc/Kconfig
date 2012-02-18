@@ -569,6 +569,16 @@ config APANIC_PLABEL
 	 If your platform uses a different flash partition label for storing
  	 crashdumps, enter it here.
 
+config MDM_CTRL
+	bool "Modem control"
+	default n
+
+config MISC_NVODMCAM
+	tristate "Camera driver for use with nVidia ODM subsystem"
+	depends on ARCH_TEGRA
+	---help---
+	  This is a custom driver to facilitate camera power control with nVidia ODM
+
 config GPS_GPIO_BRCM4750
 	bool "Enable gpio controller for GPS brcm 4750"
 	default y

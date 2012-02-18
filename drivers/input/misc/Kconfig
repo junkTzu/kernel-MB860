@@ -470,6 +470,15 @@ config INPUT_CMA3000_I2C
 	  To compile this driver as a module, choose M here: the
 	  module will be called cma3000_d0x_i2c.
 
+config INPUT_ALS_IR_ISL29030
+	tristate "ISL29030 ALS & IR Sensor"
+	default y
+	help
+	  Say Y here if you wish to include support for the ISL29030 ALS
+	  and IR sensor.
+
+	  If unsure, say N.
+
 config INPUT_XEN_KBDDEV_FRONTEND
 	tristate "Xen virtual keyboard and mouse support"
 	depends on XEN_FBDEV_FRONTEND

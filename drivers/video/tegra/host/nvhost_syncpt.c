@@ -21,10 +21,13 @@
  */
 
 #include "nvhost_syncpt.h"
-#include "dev.h"
+#include "nvhost_dev.h"
+
+extern int nvhost_channel_fifo_debug(struct nvhost_dev *m);
+extern void nvhost_sync_reg_dump(struct nvhost_dev *m);
 
 #define client_managed(id) (BIT(id) & NVSYNCPTS_CLIENT_MANAGED)
-#define syncpt_to_dev(sp) container_of(sp, struct nvhost_master, syncpt)
+#define syncpt_to_dev(sp) container_of(sp, struct nvhost_dev, syncpt)
 #define SYNCPT_CHECK_PERIOD 2*HZ
 
 static bool check_max(struct nvhost_syncpt *sp, u32 id, u32 real)
@@ -42,7 +45,7 @@ static bool check_max(struct nvhost_syncpt *sp, u32 id, u32 real)
  */
 static void reset_syncpt(struct nvhost_syncpt *sp, u32 id)
 {
-	struct nvhost_master *dev = syncpt_to_dev(sp);
+	struct nvhost_dev *dev = syncpt_to_dev(sp);
 	int min;
 	smp_rmb();
 	min = atomic_read(&sp->min_val[id]);
@@ -54,7 +57,7 @@ static void reset_syncpt(struct nvhost_syncpt *sp, u32 id)
  */
 static void reset_syncpt_wait_base(struct nvhost_syncpt *sp, u32 id)
 {
-	struct nvhost_master *dev = syncpt_to_dev(sp);
+	struct nvhost_dev *dev = syncpt_to_dev(sp);
 	writel(sp->base_val[id],
 		dev->sync_aperture + (HOST1X_SYNC_SYNCPT_BASE_0 + id * 4));
 }
@@ -64,7 +67,7 @@ static void reset_syncpt_wait_base(struct nvhost_syncpt *sp, u32 id)
  */
 static void read_syncpt_wait_base(struct nvhost_syncpt *sp, u32 id)
 {
-	struct nvhost_master *dev = syncpt_to_dev(sp);
+	struct nvhost_dev *dev = syncpt_to_dev(sp);
 	sp->base_val[id] = readl(dev->sync_aperture +
 				(HOST1X_SYNC_SYNCPT_BASE_0 + id * 4));
 }
@@ -105,9 +108,9 @@ void nvhost_syncpt_save(struct nvhost_syncpt *sp)
  */
 u32 nvhost_syncpt_update_min(struct nvhost_syncpt *sp, u32 id)
 {
-	struct nvhost_master *dev = syncpt_to_dev(sp);
+	struct nvhost_dev *dev = syncpt_to_dev(sp);
 	void __iomem *sync_regs = dev->sync_aperture;
-	u32 old, live;
+	u32 old, live, maxsp;
 
 	do {
 		smp_rmb();
@@ -115,7 +118,17 @@ u32 nvhost_syncpt_update_min(struct nvhost_syncpt *sp, u32 id)
 		live = readl(sync_regs + (HOST1X_SYNC_SYNCPT_0 + id * 4));
 	} while ((u32)atomic_cmpxchg(&sp->min_val[id], old, live) != old);
 
-	BUG_ON(!check_max(sp, id, live));
+	if(!check_max(sp, id, live))
+        {
+              smp_rmb();
+              maxsp = (u32)atomic_read(&sp->max_val[id]);
+              nvhost_sync_reg_dump(dev);
+              printk("%s check_max failed: id=%lu  max=%lu  real=%lu \n",__func__,
+                                                               (unsigned long)id,
+                                                               (unsigned long)maxsp,
+                                                               (unsigned long)live);
+              BUG();
+        }
 
 	return live;
 }
@@ -139,9 +152,14 @@ u32 nvhost_syncpt_read(struct nvhost_syncpt *sp, u32 id)
  */
 void nvhost_syncpt_cpu_incr(struct nvhost_syncpt *sp, u32 id)
 {
-	struct nvhost_master *dev = syncpt_to_dev(sp);
-	BUG_ON(!nvhost_module_powered(&dev->mod));
-	BUG_ON(!client_managed(id) && nvhost_syncpt_min_eq_max(sp, id));
+	struct nvhost_dev *dev = syncpt_to_dev(sp);
+
+        if (!client_managed(id) && nvhost_syncpt_min_eq_max(sp, id)) {
+                dev_err(&syncpt_to_dev(sp)->pdev->dev,
+                        "Syncpoint id %d \n", id);
+                BUG();
+        }
+
 	writel(BIT(id), dev->sync_aperture + HOST1X_SYNC_SYNCPT_CPU_INCR);
 	wmb();
 }
@@ -166,6 +184,7 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 	DECLARE_WAIT_QUEUE_HEAD_ONSTACK(wq);
 	void *ref;
 	int err = 0;
+	//struct nvhost_dev *dev = syncpt_to_dev(sp);
 
 	BUG_ON(!check_max(sp, id, thresh));
 
@@ -194,30 +213,36 @@ int nvhost_syncpt_wait_timeout(struct nvhost_syncpt *sp, u32 id,
 	if (err)
 		goto done;
 
-	err = -EAGAIN;
 	/* wait for the syncpoint, or timeout, or signal */
 	while (timeout) {
 		u32 check = min_t(u32, SYNCPT_CHECK_PERIOD, timeout);
-		int remain = wait_event_interruptible_timeout(wq,
+		err = wait_event_interruptible_timeout(wq,
 						nvhost_syncpt_min_cmp(sp, id, thresh),
 						check);
-		if (remain > 0 || nvhost_syncpt_min_cmp(sp, id, thresh)) {
-			err = 0;
+		if (err != 0)
 			break;
-		}
-		if (remain < 0) {
-			err = remain;
-			break;
-		}
 		if (timeout != NVHOST_NO_TIMEOUT)
-			timeout -= check;
+			timeout -= SYNCPT_CHECK_PERIOD;
 		if (timeout) {
 			dev_warn(&syncpt_to_dev(sp)->pdev->dev,
-				"syncpoint id %d (%s) stuck waiting %d\n",
-				id, nvhost_syncpt_name(id), thresh);
+				"syncpoint id %d (%s) stuck waiting %d  timeout=%d\n",
+				id, nvhost_syncpt_name(id), thresh, timeout);
+			/* A wait queue in nvhost driver maybe run frequently
+			  when early suspend/late resume. These log will be
+			  printed,then the early suspend/late resume
+			  maybe blocked,then it will triger early suspend/late
+			  resume watchdog. Now we cancel these log. */
+			/*
 			nvhost_syncpt_debug(sp);
+			nvhost_channel_fifo_debug(dev);
+			nvhost_sync_reg_dump(dev);
+			*/
 		}
 	};
+	if (err > 0)
+		err = 0;
+	else if (err == 0)
+		err = -EAGAIN;
 	nvhost_intr_put_ref(&(syncpt_to_dev(sp)->intr), ref);
 
 done:
@@ -268,9 +293,8 @@ static bool nvhost_syncpt_wrapping_comparison(u32 x, u32 y)
 }
 
 /* check for old WAITs to be removed (avoiding a wrap) */
-int nvhost_syncpt_wait_check(struct nvmap_client *nvmap,
-			struct nvhost_syncpt *sp, u32 waitchk_mask,
-			struct nvhost_waitchk *waitp, u32 waitchks)
+int nvhost_syncpt_wait_check(struct nvhost_syncpt *sp, u32 waitchk_mask,
+		struct nvhost_waitchk *waitp, u32 waitchks)
 {
 	u32 idx;
 	int err = 0;
@@ -303,8 +327,7 @@ int nvhost_syncpt_wait_check(struct nvmap_client *nvmap,
 			override = nvhost_class_host_wait_syncpt(NVSYNCPT_GRAPHICS_HOST, 0);
 
 			/* patch the wait */
-			err = nvmap_patch_wait(nvmap,
-						(struct nvmap_handle *)waitp->mem,
+			err = nvmap_patch_wait((struct nvmap_handle *)waitp->mem,
 						waitp->offset, override);
 			if (err)
 				break;

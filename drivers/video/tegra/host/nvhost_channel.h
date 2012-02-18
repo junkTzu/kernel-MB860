@@ -36,7 +36,7 @@
 #define NVHOST_MAX_GATHERS 512
 #define NVHOST_MAX_HANDLES 1280
 
-struct nvhost_master;
+struct nvhost_dev;
 
 struct nvhost_channeldesc {
 	const char *name;
@@ -45,6 +45,7 @@ struct nvhost_channeldesc {
 	u32 waitbases;
 	u32 modulemutexes;
 	u32 class;
+	bool exclusive;
 };
 
 struct nvhost_channel {
@@ -52,9 +53,10 @@ struct nvhost_channel {
 	struct mutex reflock;
 	struct mutex submitlock;
 	void __iomem *aperture;
-	struct nvhost_master *dev;
+	struct nvhost_dev *dev;
 	const struct nvhost_channeldesc *desc;
 	struct nvhost_hwctx *cur_ctx;
+	u32 ctx_sw_count;
 	struct device *node;
 	struct cdev cdev;
 	struct nvhost_hwctx_handler ctxhandler;
@@ -74,14 +76,18 @@ struct nvhost_cpuinterrupt {
 
 int nvhost_channel_init(
 	struct nvhost_channel *ch,
-	struct nvhost_master *dev, int index);
+	struct nvhost_dev *dev, int index);
 
-void nvhost_channel_submit(struct nvhost_channel *ch,
-			   struct nvmap_client *user_nvmap,
-			   struct nvhost_op_pair *ops, int num_pairs,
-			   struct nvhost_cpuinterrupt *intrs, int num_intrs,
-			   struct nvmap_handle **unpins, int num_unpins,
-			   u32 syncpt_id, u32 syncpt_val);
+void nvhost_channel_submit(
+	struct nvhost_channel *ch,
+	struct nvhost_op_pair *ops,
+	int num_pairs,
+	struct nvhost_cpuinterrupt *intrs,
+	int num_intrs,
+	struct nvmap_handle **unpins,
+	int num_unpins,
+	u32 syncpt_id,
+	u32 syncpt_val);
 
 struct nvhost_channel *nvhost_getchannel(struct nvhost_channel *ch);
 void nvhost_putchannel(struct nvhost_channel *ch, struct nvhost_hwctx *ctx);

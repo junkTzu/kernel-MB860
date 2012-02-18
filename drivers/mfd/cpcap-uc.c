@@ -40,7 +40,10 @@
 #define RAM_START_ST         0x0000
 #define RAM_END_ST           0x0FFF
 
-#define HWCFG_ADDR_ST        0x0122
+#define WDT_TIMEOUT_ADDR     0x012E
+#define WDT_TIMER_ADDR       0x012C
+#define HWCFG_ADDR_ST        0x0130
+#define HWCFG_ADDR_TI        0x90F4  /* Not yet implemented in the TI uC. */
 
 enum {
 	READ_STATE_1,	/* Send size and location of RAM read. */
@@ -76,7 +79,8 @@ struct cpcap_uc_data {
 static struct cpcap_uc_data *cpcap_uc_info;
 
 static int fops_open(struct inode *inode, struct file *file);
-static long fops_ioctl(struct file *file, unsigned int cmd, unsigned long arg);
+static int fops_ioctl(struct inode *inode, struct file *file,
+		      unsigned int cmd, unsigned long arg);
 static ssize_t fops_write(struct file *file, const char *buf,
 			  size_t count, loff_t *ppos);
 static ssize_t fops_read(struct file *file, char *buf,
@@ -85,7 +89,8 @@ static ssize_t fops_read(struct file *file, char *buf,
 
 static const struct file_operations fops = {
 	.owner = THIS_MODULE,
-	.unlocked_ioctl = fops_ioctl,
+	//No longer used...
+	//	.ioctl = fops_ioctl,
 	.open = fops_open,
 	.read = fops_read,
 	.write = fops_write,
@@ -324,6 +329,8 @@ static void reset_handler(enum cpcap_irqs irq, void *data)
 
 	cpcap_regacc_write(uc_data->cpcap, CPCAP_REG_MI2, 0, 0xFFFF);
 	cpcap_regacc_write(uc_data->cpcap, CPCAP_REG_MIM1, 0xFFFF, 0xFFFF);
+	cpcap_regacc_write_secondary(uc_data->cpcap, CPCAP_REG_MI2, 0, 0xFFFF);
+	cpcap_regacc_write_secondary(uc_data->cpcap, CPCAP_REG_MIM1, 0xFFFF, 0xFFFF);
 	cpcap_irq_mask(uc_data->cpcap, CPCAP_IRQ_PRIMAC);
 	cpcap_irq_unmask(uc_data->cpcap, CPCAP_IRQ_UCRESET);
 
@@ -544,8 +551,8 @@ err:
 	return retval;
 }
 
-static long fops_ioctl(struct file *file, unsigned int cmd,
-		       unsigned long arg)
+static int fops_ioctl(struct inode *inode, struct file *file,
+		      unsigned int cmd, unsigned long arg)
 {
 	int retval = -ENOTTY;
 	struct cpcap_uc_data *data = file->private_data;
@@ -559,12 +566,14 @@ static long fops_ioctl(struct file *file, unsigned int cmd,
 		 */
 		data->is_ready = 1;
 
-		retval = cpcap_uc_start(data->cpcap, (enum cpcap_macro)arg);
+		retval = cpcap_uc_start(data->cpcap, CPCAP_BANK_PRIMARY,
+			                (enum cpcap_macro)arg);
 
 		break;
 
 	case CPCAP_IOCTL_UC_MACRO_STOP:
-		retval = cpcap_uc_stop(data->cpcap, (enum cpcap_macro)arg);
+		retval = cpcap_uc_stop(data->cpcap, CPCAP_BANK_PRIMARY,
+				       (enum cpcap_macro)arg);
 		break;
 
 	case CPCAP_IOCTL_UC_GET_VENDOR:
@@ -602,7 +611,7 @@ static int fops_open(struct inode *inode, struct file *file)
 	return retval;
 }
 
-int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro)
+int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_bank bank, enum cpcap_macro macro)
 {
 	int retval = -EFAULT;
 	struct cpcap_uc_data *data = cpcap->ucdata;
@@ -610,16 +619,21 @@ int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro)
 	if ((data->is_ready) &&
 	    (macro > CPCAP_MACRO_USEROFF) && (macro < CPCAP_MACRO__END) &&
 	    (data->uc_reset == 0)) {
-		if ((macro == CPCAP_MACRO_4) ||
-		    ((cpcap->vendor == CPCAP_VENDOR_ST) &&
-		     ((macro == CPCAP_MACRO_12) || (macro == CPCAP_MACRO_14) ||
-		      (macro == CPCAP_MACRO_15)))) {
-			retval = cpcap_regacc_write(cpcap, CPCAP_REG_MI2,
-						    (1 << macro),
-						    (1 << macro));
+		if (bank == CPCAP_BANK_PRIMARY){
+			if ((macro == CPCAP_MACRO_4) ||
+		 	   ((cpcap->vendor == CPCAP_VENDOR_ST) &&
+		 	     ((macro == CPCAP_MACRO_12) || 
+			      (macro == CPCAP_MACRO_14)))) {
+				retval = cpcap_regacc_write(cpcap, CPCAP_REG_MI2,
+							    (1 << macro),
+							    (1 << macro));
+			} else {
+				retval = cpcap_regacc_write(cpcap, CPCAP_REG_MIM1,
+							    0, (1 << macro));
+			}
 		} else {
-			retval = cpcap_regacc_write(cpcap, CPCAP_REG_MIM1,
-						    0, (1 << macro));
+			retval = cpcap_regacc_write_secondary(cpcap, CPCAP_REG_MI2,
+							    (1 << macro), (1 << macro));
 		}
 	}
 
@@ -627,20 +641,62 @@ int cpcap_uc_start(struct cpcap_device *cpcap, enum cpcap_macro macro)
 }
 EXPORT_SYMBOL_GPL(cpcap_uc_start);
 
-int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_macro macro)
+int cpcap_uc_set_wdt_timeout(struct cpcap_device *cpcap, unsigned short timeout )
+{
+	int retval = -EFAULT;
+	struct cpcap_uc_data *uc_data = cpcap->ucdata;
+
+	if ((uc_data->is_ready) && (timeout < 0xFFFF) &&
+	    (uc_data->uc_reset == 0)) {
+		retval = ram_write(uc_data, WDT_TIMEOUT_ADDR, 1, &timeout);
+	}
+	return retval;
+}
+EXPORT_SYMBOL_GPL(cpcap_uc_set_wdt_timeout);
+
+int cpcap_uc_get_wdt_timeout(struct cpcap_device *cpcap, unsigned short *timeout )
+{
+	int retval = -EFAULT;
+	struct cpcap_uc_data *uc_data = cpcap->ucdata;
+
+	if ((uc_data->is_ready) && (uc_data->uc_reset == 0)) {
+		retval = ram_read(uc_data, WDT_TIMEOUT_ADDR, 1, timeout);
+	}
+	return retval;
+}
+EXPORT_SYMBOL_GPL(cpcap_uc_get_wdt_timeout);
+
+int cpcap_uc_get_wdt_timer(struct cpcap_device *cpcap, unsigned short *timer )
+{
+	int retval = -EFAULT;
+	struct cpcap_uc_data *uc_data = cpcap->ucdata;
+
+	if ((uc_data->is_ready) && (uc_data->uc_reset == 0)) {
+		retval = ram_read(uc_data, WDT_TIMER_ADDR, 1, timer);
+	}
+	return retval;
+}
+EXPORT_SYMBOL_GPL(cpcap_uc_get_wdt_timer);
+
+int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_bank bank, enum cpcap_macro macro)
 {
 	int retval = -EFAULT;
 
 	if ((macro > CPCAP_MACRO_4) &&
 	    (macro < CPCAP_MACRO__END)) {
-		if ((cpcap->vendor == CPCAP_VENDOR_ST) &&
-		    ((macro == CPCAP_MACRO_12) || (macro == CPCAP_MACRO_14) ||
-		     (macro == CPCAP_MACRO_15))) {
-			retval = cpcap_regacc_write(cpcap, CPCAP_REG_MI2,
-						    0, (1 << macro));
+		if (bank == CPCAP_BANK_PRIMARY){
+			if ((cpcap->vendor == CPCAP_VENDOR_ST) &&
+			     ((macro == CPCAP_MACRO_12)||
+			      (macro == CPCAP_MACRO_14))) {
+				retval = cpcap_regacc_write(cpcap, CPCAP_REG_MI2,
+							    0, (1 << macro));
+			} else {
+				retval = cpcap_regacc_write(cpcap, CPCAP_REG_MIM1,
+							    (1 << macro), (1 << macro));
+			}
 		} else {
-			retval = cpcap_regacc_write(cpcap, CPCAP_REG_MIM1,
-						    (1 << macro), (1 << macro));
+			retval = cpcap_regacc_write_secondary(cpcap, CPCAP_REG_MI2,
+						    0, (1 << macro));
 		}
 	}
 
@@ -648,25 +704,31 @@ int cpcap_uc_stop(struct cpcap_device *cpcap, enum cpcap_macro macro)
 }
 EXPORT_SYMBOL_GPL(cpcap_uc_stop);
 
-unsigned char cpcap_uc_status(struct cpcap_device *cpcap,
+unsigned char cpcap_uc_status(struct cpcap_device *cpcap, enum cpcap_bank bank,
 			      enum cpcap_macro macro)
 {
 	unsigned char retval = 0;
 	unsigned short regval;
 
 	if (macro < CPCAP_MACRO__END) {
-		if ((macro <= CPCAP_MACRO_4) ||
-		    ((cpcap->vendor == CPCAP_VENDOR_ST) &&
-		     ((macro == CPCAP_MACRO_12) || (macro == CPCAP_MACRO_14) ||
-		      (macro == CPCAP_MACRO_15)))) {
-			cpcap_regacc_read(cpcap, CPCAP_REG_MI2, &regval);
+		if (bank == CPCAP_BANK_PRIMARY){
+			if ((macro <= CPCAP_MACRO_4) ||
+			    ((cpcap->vendor == CPCAP_VENDOR_ST) &&
+			     (macro == CPCAP_MACRO_12))) {
+				cpcap_regacc_read(cpcap, CPCAP_REG_MI2, &regval);
+	
+				if (regval & (1 << macro))
+					retval = 1;
+			} else {
+				cpcap_regacc_read(cpcap, CPCAP_REG_MIM1, &regval);
+	
+				if (!(regval & (1 << macro)))
+					retval = 1;
+			}
+		} else {
+			cpcap_regacc_read_secondary(cpcap, CPCAP_REG_MI2, &regval);
 
 			if (regval & (1 << macro))
-				retval = 1;
-		} else {
-			cpcap_regacc_read(cpcap, CPCAP_REG_MIM1, &regval);
-
-			if (!(regval & (1 << macro)))
 				retval = 1;
 		}
 	}
@@ -714,7 +776,7 @@ static int fw_load(struct cpcap_uc_data *uc_data, struct device *dev)
 		}
 
 		num_words = num_bytes >> 1;
-		dev_info(dev, "Loading %d word(s) at 0x%04x\n",
+		dev_dbg(dev, "Loading %d word(s) at 0x%04x\n",
 			 num_words, be32_to_cpu(rec->addr));
 
 		buf = kzalloc(num_bytes, GFP_KERNEL);
@@ -748,13 +810,19 @@ static int fw_load(struct cpcap_uc_data *uc_data, struct device *dev)
 	if (!err) {
 		uc_data->is_ready = 1;
 
-		if (uc_data->cpcap->vendor == CPCAP_VENDOR_ST) {
-			err = ram_write(uc_data, HWCFG_ADDR_ST, CPCAP_HWCFG_NUM,
-					data->hwcfg);
-			dev_info(dev, "Loaded HWCFG data: %d\n", err);
-		}
+		if (uc_data->cpcap->vendor == CPCAP_VENDOR_ST)
+			err = ram_write(uc_data, HWCFG_ADDR_ST, CPCAP_HWCFG_NUM, data->hwcfg);
+		else
+			err = ram_write(uc_data, HWCFG_ADDR_TI, CPCAP_HWCFG_NUM, data->hwcfg);
 
-		err = cpcap_uc_start(uc_data->cpcap, CPCAP_MACRO_4);
+		dev_info(dev, "Loaded HWCFG data:");
+		for (i = 0; i < CPCAP_HWCFG_NUM; i++) {
+			dev_info(dev, " 0x%04x", data->hwcfg[i]);
+		}
+		dev_info(dev, "result: %d\n", err);
+
+		err = cpcap_uc_start(uc_data->cpcap, CPCAP_BANK_PRIMARY,
+							 CPCAP_MACRO_4);
 		dev_info(dev, "Started macro 4: %d\n", err);
 	}
 
@@ -822,6 +890,9 @@ static int cpcap_uc_probe(struct platform_device *pdev)
 		data->is_supported = 1;
 
 		cpcap_regacc_write(data->cpcap, CPCAP_REG_MIM1, 0xFFFF,
+				   0xFFFF);
+
+		cpcap_regacc_write_secondary(data->cpcap, CPCAP_REG_MIM1, 0xFFFF,
 				   0xFFFF);
 
 		retval = fw_load(data, &pdev->dev);

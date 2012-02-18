@@ -73,6 +73,7 @@ struct tegra_iovmm_client {
 	unsigned long			flags;
 	struct iovmm_share_group	*group;
 	struct tegra_iovmm_domain	*domain;
+	struct miscdevice		*misc_dev;
 	struct list_head		list;
 };
 
@@ -90,7 +91,7 @@ struct tegra_iovmm_area {
 
 struct tegra_iovmm_device_ops {
 	/* maps a VMA using the page residency functions provided by the VMA */
-	int (*map)(struct tegra_iovmm_device *dev,
+	int (*map)(struct tegra_iovmm_domain *domain,
 		struct tegra_iovmm_area *io_vma);
 	/* marks all PTEs in a VMA as invalid; decommits the virtual addres
 	 * space (potentially freeing PDEs when decommit is true.) */
@@ -101,17 +102,17 @@ struct tegra_iovmm_device_ops {
 		tegra_iovmm_addr_t offs, unsigned long pfn);
 	/* ensures that a domain is resident in the hardware's mapping region
 	 * so that it may be used by a client */
-	int (*lock_domain)(struct tegra_iovmm_device *dev,
-		struct tegra_iovmm_domain *domain);
-	void (*unlock_domain)(struct tegra_iovmm_device *dev,
-		struct tegra_iovmm_domain *domain);
+	int (*lock_domain)(struct tegra_iovmm_domain *domain,
+		struct tegra_iovmm_client *client);
+	void (*unlock_domain)(struct tegra_iovmm_domain *domain,
+		struct tegra_iovmm_client *client);
 	/* allocates a vmm_domain for the specified client; may return the same
 	 * domain for multiple clients */
 	struct tegra_iovmm_domain* (*alloc_domain)(
 		struct tegra_iovmm_device *dev,
 		struct tegra_iovmm_client *client);
-	void (*free_domain)(struct tegra_iovmm_device *dev,
-		struct tegra_iovmm_domain *domain);
+	void (*free_domain)(struct tegra_iovmm_domain *domain,
+		struct tegra_iovmm_client *client);
 	int (*suspend)(struct tegra_iovmm_device *dev);
 	void (*resume)(struct tegra_iovmm_device *dev);
 };
@@ -131,7 +132,7 @@ struct tegra_iovmm_area_ops {
 /* called by clients to allocate an I/O VMM client mapping context which
  * will be shared by all clients in the same share_group */
 struct tegra_iovmm_client *tegra_iovmm_alloc_client(const char *name,
-	const char *share_group);
+	const char *share_group, struct miscdevice *misc_dev);
 
 size_t tegra_iovmm_get_vm_size(struct tegra_iovmm_client *client);
 
@@ -153,7 +154,7 @@ void tegra_iovmm_client_unlock(struct tegra_iovmm_client *client);
  * respectively. VM operations may be called before this call returns */
 struct tegra_iovmm_area *tegra_iovmm_create_vm(
 	struct tegra_iovmm_client *client, struct tegra_iovmm_area_ops *ops,
-	unsigned long size, pgprot_t pgprot);
+	size_t size, size_t align, pgprot_t pgprot, unsigned long iovm_start);
 
 /* called by clients to "zap" an iovmm_area, and replace all mappings
  * in it with invalid ones, without freeing the virtual address range */
@@ -165,6 +166,9 @@ void tegra_iovmm_unzap_vm(struct tegra_iovmm_area *vm);
 
 /* called by clients to return an iovmm_area to the free pool for the domain */
 void tegra_iovmm_free_vm(struct tegra_iovmm_area *vm);
+
+/* returns size of largest free iovm block */
+size_t tegra_iovmm_get_max_free(struct tegra_iovmm_client *client);
 
 /* called by client software to map the page-aligned I/O address vaddr to
  * a specific physical address pfn. I/O VMA should have been created with
@@ -195,7 +199,7 @@ int tegra_iovmm_unregister(struct tegra_iovmm_device *dev);
 #else /* CONFIG_TEGRA_IOVMM */
 
 static inline struct tegra_iovmm_client *tegra_iovmm_alloc_client(
-	const char *name, const char *share_group)
+	const char *name, const char *share_group, struct miscdevice *misc_dev)
 {
 	return NULL;
 }

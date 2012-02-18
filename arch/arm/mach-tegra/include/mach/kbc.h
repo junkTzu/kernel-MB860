@@ -38,6 +38,8 @@
 
 struct tegra_kbc_pin_cfg {
 	bool is_row;
+	//Legacy keyboard stuff...
+	bool is_col;
 	unsigned char num;
 };
 
@@ -58,5 +60,15 @@ struct tegra_kbc_platform_data {
 
 	bool wakeup;
 	bool use_fn_map;
+
+	//Legacy code...
+	int *keymap;
 };
+
+//Legacy keyboard stuff...
+static inline unsigned int kbc_indexof(unsigned r, unsigned c)
+{
+	return c*KBC_MAX_ROW + r;
+}
+
 #endif

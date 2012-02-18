@@ -34,6 +34,7 @@
 
 struct l3g4200d_platform_data {
 	int poll_interval;
+	int min_interval;
 	unsigned gpio_drdy;
 
 	u8 ctrl_reg1;
@@ -47,6 +48,7 @@ struct l3g4200d_platform_data {
 	u8 fifo_ctrl_reg;
 
 	u8 int1_cfg;
+	u8 int_source;
 
 	u8 int1_tsh_xh;
 	u8 int1_tsh_xl;
@@ -55,6 +57,20 @@ struct l3g4200d_platform_data {
 	u8 int1_tsh_zh;
 	u8 int1_tsh_zl;
 	u8 int1_duration;
+
+	u8 g_range;
+
+	u8 axis_map_x;
+	u8 axis_map_y;
+	u8 axis_map_z;
+
+	u8 negate_x;
+	u8 negate_y;
+	u8 negate_z;
+
+	void (*exit)(void);
+	int (*power_on)(void);
+	int (*power_off)(void);
 };
 #endif /* __KERNEL__ */
 

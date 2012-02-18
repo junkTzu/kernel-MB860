@@ -86,6 +86,26 @@ struct sdhci_host {
 /* Controller treats ADMA descriptors with length 0000h incorrectly */
 #define SDHCI_QUIRK_BROKEN_ADMA_ZEROLEN_DESC		(1<<30)
 
+/* Quirks from legacy Tegra SDHCI drivers...
+/* Controller needs 10ms delay between applying power and clock */
+#define SDHCI_QUIRK_DELAY_AFTER_POWER			(1<<23)
+/* Controller uses SDCLK instead of TMCLK for data timeouts */
+#define SDHCI_QUIRK_DATA_TIMEOUT_USES_SDCLK		(1<<24)
+/* Controller write protect bit is broken. Assume no write protection */
+#define SDHCI_QUIRK_BROKEN_WRITE_PROTECT		(1<<25)
+/* Controller needs INTERRUPT_AT_BLOCK_GAP enabled to detect card interrupts */
+#define SDHCI_QUIRK_ENABLE_INTERRUPT_AT_BLOCK_GAP	(1<<26)
+/* Controller should not program HIGH_SPEED_EN after switching to high speed */
+#define SDHCI_QUIRK_BROKEN_CTRL_HISPD			(1<<27)
+/* Controller handles ADMA descriptor with length 0000h incorrectly */
+#define SDHCI_QUIRK_NO_64KB_ADMA			(1<<28)
+/* Version reported in HOST_VERSION is incorrect */
+#define SDHCI_QUIRK_BROKEN_SPEC_VERSION			(1<<29)
+/* Controller should not use SDIO IRQ */
+#define SDHCI_QUIRK_NO_SDIO_IRQ				(1<<30)
+/* Controller allows runtime enable / disable */
+#define SDHCI_QUIRK_RUNTIME_DISABLE			(1<<31)
+
 	int irq;		/* Device IRQ */
 	void __iomem *ioaddr;	/* Mapped address */
 
@@ -112,6 +132,7 @@ struct sdhci_host {
 
 	unsigned int version;	/* SDHCI spec. version */
 
+	unsigned int last_clk;	/* Last configured clock */
 	unsigned int max_clk;	/* Max possible freq (MHz) */
 	unsigned int timeout_clk;	/* Timeout freq (KHz) */
 
@@ -138,6 +159,16 @@ struct sdhci_host {
 	struct tasklet_struct finish_tasklet;
 
 	struct timer_list timer;	/* Timer for timeouts */
+
+	unsigned int		data_width;	/* Width of data transfers */
+
+#ifdef CONFIG_EMBEDDED_MMC_START_OFFSET
+	unsigned int		start_offset;	/* Zero-offset for MBR */
+#endif
+
+	struct regulator	*regulator;
+
+	unsigned int		max_power_class;
 
 	unsigned int caps;	/* Alternative capabilities */
 

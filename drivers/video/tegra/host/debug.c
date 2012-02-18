@@ -1,35 +1,66 @@
 /*
- * drivers/video/tegra/dc/dc.c
+ * drivers/video/tegra/host/debug.c
  *
- * Copyright (C) 2010 Google, Inc.
- * Author: Erik Gilling <konkers@android.com>
+ * Copyright (c) 2010, NVIDIA Corporation.
  *
- * This software is licensed under the terms of the GNU General Public
- * License version 2, as published by the Free Software Foundation, and
- * may be copied, distributed, and modified under those terms.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
  *
+ * You should have received a copy of the GNU General Public License along
+ * with this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
-#include <linux/debugfs.h>
-#include <linux/seq_file.h>
-
+#include <linux/kernel.h>
 #include <asm/io.h>
-
-#include "dev.h"
-
-static struct nvhost_master *debug_master;
+#include "nvhost_dev.h"
 
 enum {
 	NVHOST_DBG_STATE_CMD = 0,
 	NVHOST_DBG_STATE_DATA = 1,
 };
 
-static int nvhost_debug_handle_cmd(struct seq_file *s, u32 val, int *count)
+#define HOST1X_CHANNEL_DMAGET		0x1c
+
+#define HOST1X_SYNC_CF_SETUP(x)		(0x3080 + (4 * (x)))
+
+#define HOST1X_SYNC_SYNCPT_BASE(x)	(0x3600 + (4 * (x)))
+
+#define HOST1X_SYNC_CBREAD(x)		(0x3720 + (4 * (x)))
+#define HOST1X_SYNC_CFPEEK_CTRL		0x374c
+#define HOST1X_SYNC_CFPEEK_READ		0x3750
+#define HOST1X_SYNC_CFPEEK_PTRS		0x3754
+#define HOST1X_SYNC_CBSTAT(x)		(0x3758 + (4 * (x)))
+
+/**
+ * Find the currently executing gather in the push buffer and return
+ * its physical address and size.
+ */
+void nvhost_cdma_find_gather(struct nvhost_cdma *cdma, u32 dmaget, u32 *addr, u32 *size)
+{
+	u32 offset = dmaget - cdma->push_buffer.phys;
+
+	*addr = *size = 0;
+
+	if (offset >= 8 && offset < cdma->push_buffer.cur) {
+		u32 *p = cdma->push_buffer.mapped + (offset - 8) / 4;
+
+		/* Make sure we have a gather */
+		if ((p[0] >> 28) == 6) {
+			*addr = p[1];
+			*size = p[0] & 0x3fff;
+		}
+	}
+}
+
+static int nvhost_debug_handle_cmd(u32 val, int *count)
 {
 	unsigned mask;
 	unsigned subop;
@@ -38,43 +69,43 @@ static int nvhost_debug_handle_cmd(struct seq_file *s, u32 val, int *count)
 	case 0x0:
 		mask = val & 0x3f;
 		if (mask) {
-			seq_printf(s, "SETCL(class=%03x, offset=%03x, mask=%02x, [",
+			printk("SETCL(class=%03x, offset=%03x, mask=%02x, [",
 				   val >> 6 & 0x3ff, val >> 16 & 0xfff, mask);
 			*count = hweight8(mask);
 			return NVHOST_DBG_STATE_DATA;
 		} else {
-			seq_printf(s, "SETCL(class=%03x)\n", val >> 6 & 0x3ff);
+			printk("SETCL(class=%03x)\n", val >> 6 & 0x3ff);
 			return NVHOST_DBG_STATE_CMD;
 		}
 
 	case 0x1:
-		seq_printf(s, "INCR(offset=%03x, [", val >> 16 & 0xfff);
+		printk("INCR(offset=%03x, [", val >> 16 & 0xfff);
 		*count = val & 0xffff;
 		return NVHOST_DBG_STATE_DATA;
 
 	case 0x2:
-		seq_printf(s, "NONINCR(offset=%03x, [", val >> 16 & 0xfff);
+		printk("NONINCR(offset=%03x, [", val >> 16 & 0xfff);
 		*count = val & 0xffff;
 		return NVHOST_DBG_STATE_DATA;
 
 	case 0x3:
 		mask = val & 0xffff;
-		seq_printf(s, "MASK(offset=%03x, mask=%03x, [",
+		printk("MASK(offset=%03x, mask=%03x, [",
 			   val >> 16 & 0xfff, mask);
 		*count = hweight16(mask);
 		return NVHOST_DBG_STATE_DATA;
 
 	case 0x4:
-		seq_printf(s, "IMM(offset=%03x, data=%03x)\n",
-			   val >> 16 & 0x3ff, val & 0xffff);
+		printk("IMM(offset=%03x, data=%03x)\n",
+			   val >> 16 & 0xfff, val & 0xffff);
 		return NVHOST_DBG_STATE_CMD;
 
 	case 0x5:
-		seq_printf(s, "RESTART(offset=%08x)\n", val << 4);
+		printk("RESTART(offset=%08x)\n", val << 4);
 		return NVHOST_DBG_STATE_CMD;
 
 	case 0x6:
-		seq_printf(s, "GATHER(offset=%03x, insert=%d, type=%d, count=%04x, addr=[",
+		printk("GATHER(offset=%03x, insert=%d, type=%d, count=%04x, addr=[",
 			   val >> 16 & 0x3ff, val >> 15 & 0x1, val >> 15 & 0x1,
 			   val & 0x3fff);
 		*count = 1;
@@ -83,16 +114,16 @@ static int nvhost_debug_handle_cmd(struct seq_file *s, u32 val, int *count)
 	case 0xe:
 		subop = val >> 24 & 0xf;
 		if (subop == 0)
-			seq_printf(s, "ACQUIRE_MLOCK(index=%d)\n", val & 0xff);
+			printk("ACQUIRE_MLOCK(index=%d)\n", val & 0xff);
 		else if (subop == 1)
-			seq_printf(s, "RELEASE_MLOCK(index=%d)\n", val & 0xff);
+			printk("RELEASE_MLOCK(index=%d)\n", val & 0xff);
 		else
-			seq_printf(s, "EXTEND_UNKNOWN(%08x)\n", val);
+			printk("EXTEND_UNKNOWN(%08x)\n", val);
 
 		return NVHOST_DBG_STATE_CMD;
 
 	case 0xf:
-		seq_printf(s, "DONE()\n");
+		printk("DONE()\n");
 		return NVHOST_DBG_STATE_CMD;
 
 	default:
@@ -100,89 +131,45 @@ static int nvhost_debug_handle_cmd(struct seq_file *s, u32 val, int *count)
 	}
 }
 
-static void nvhost_debug_handle_word(struct seq_file *s, int *state, int *count,
-				     unsigned long addr, int channel, u32 val)
+static void nvhost_debug_handle_word(int *state, int *count,
+				     u32 addr, int channel, u32 val)
 {
 	switch (*state) {
 	case NVHOST_DBG_STATE_CMD:
 		if (addr)
-			seq_printf(s, "%d: %08lx: %08x:", channel, addr, val);
+			printk("%d: %08x: %08x:", channel, addr, val);
 		else
-			seq_printf(s, "%d: %08x:", channel, val);
+			printk("%d: %08x:", channel, val);
 
-		*state = nvhost_debug_handle_cmd(s, val, count);
+		*state = nvhost_debug_handle_cmd(val, count);
 		if (*state == NVHOST_DBG_STATE_DATA && *count == 0) {
 			*state = NVHOST_DBG_STATE_CMD;
-			seq_printf(s, "])\n");
+			printk("])\n");
 		}
 		break;
 
 	case NVHOST_DBG_STATE_DATA:
 		(*count)--;
-		seq_printf(s, "%08x%s", val, *count > 0 ? ", " : "])\n");
+		printk("%08x%s", val, *count > 0 ? ", " : "])\n");
 		if (*count == 0)
 			*state = NVHOST_DBG_STATE_CMD;
 		break;
 	}
 }
 
-static void nvhost_sync_reg_dump(struct seq_file *s)
+
+int nvhost_channel_fifo_debug(struct nvhost_dev *m)
 {
-	struct nvhost_master *m = s->private;
-	int i;
-
-	/* print HOST1X_SYNC regs 4 per line (from 0x3000 -> 0x31E0) */
-	for (i = 0; i <= 0x1E0; i += 4) {
-		if ((i & 0xF) == 0x0)
-			seq_printf(s, "\n0x%08x : ", i);
-		seq_printf(s, "%08x  ", readl(m->sync_aperture + i));
-	}
-
-	seq_printf(s, "\n\n");
-
-	/* print HOST1X_SYNC regs 4 per line (from 0x3340 -> 0x3774) */
-	for (i = 0x340; i <= 0x774; i += 4) {
-		if ((i & 0xF) == 0x0)
-			seq_printf(s, "\n0x%08x : ", i);
-		seq_printf(s, "%08x  ", readl(m->sync_aperture + i));
-	}
-}
-
-static int nvhost_debug_show(struct seq_file *s, void *unused)
-{
-	struct nvhost_master *m = s->private;
 	int i;
 
 	nvhost_module_busy(&m->mod);
 
-	seq_printf(s, "---- mlocks ----\n");
-	for (i = 0; i < NV_HOST1X_NB_MLOCKS; i++) {
-		u32 owner = readl(m->sync_aperture + HOST1X_SYNC_MLOCK_OWNER_0 + i * 4);
-		if (owner & 0x1)
-			seq_printf(s, "%d: locked by channel %d\n", i, (owner >> 8) * 0xff);
-		else if (owner & 0x2)
-			seq_printf(s, "%d: locked by cpu\n", i);
-		else
-			seq_printf(s, "%d: unlocked\n", i);
-	}
-	seq_printf(s, "\n---- syncpts ----\n");
-	for (i = 0; i < NV_HOST1X_SYNCPT_NB_PTS; i++) {
-		u32 max = nvhost_syncpt_read_max(&m->syncpt, i);
-		if (!max)
-			continue;
-		seq_printf(s, "id %d (%s) min %d max %d\n",
-			i, nvhost_syncpt_name(i),
-			nvhost_syncpt_update_min(&m->syncpt, i), max);
-
-	}
-
-	seq_printf(s, "\n---- channels ----\n");
 	for (i = 0; i < NVHOST_NUMCHANNELS; i++) {
 		void __iomem *regs = m->channels[i].aperture;
 		u32 dmaput, dmaget, dmactrl;
 		u32 cbstat, cbread;
 		u32 fifostat;
-		u32 val, base, offset;
+		u32 val, base, baseval;
 		unsigned start, end;
 		unsigned wr_ptr, rd_ptr;
 		int state;
@@ -195,34 +182,30 @@ static int nvhost_debug_show(struct seq_file *s, void *unused)
 		cbread = readl(m->aperture + HOST1X_SYNC_CBREAD(i));
 		cbstat = readl(m->aperture + HOST1X_SYNC_CBSTAT(i));
 
-		seq_printf(s, "%d-%s (%d): ", i, m->channels[i].mod.name,
-			   atomic_read(&m->channels[i].mod.refcount));
-
 		if (dmactrl != 0x0 || !m->channels[i].cdma.push_buffer.mapped) {
-			seq_printf(s, "inactive\n\n");
+			printk("%d: inactive\n", i);
 			continue;
 		}
 
 		switch (cbstat) {
-		case 0x00010008:		/* HOST_WAIT_SYNCPT */
-			seq_printf(s, "waiting on syncpt %d val %d\n",
-				   cbread >> 24, cbread & 0xffffff);
+		case 0x00010008:
+			printk("%d: waiting on syncpt %d val %d\n",
+				   i, cbread >> 24, cbread & 0xffffff);
 			break;
 
-		case 0x00010009:		/* HOST_WAIT_SYNCPT_BASE */
-			base = cbread >> 15 & 0xf;
-			offset = cbread & 0xffff;
+		case 0x00010009:
+			base = cbread >> 16 & 0xff;
+			baseval = readl(m->aperture + HOST1X_SYNC_SYNCPT_BASE(base)) & 0xffff;
 
-			val = readl(m->aperture + HOST1X_SYNC_SYNCPT_BASE(base)) & 0xffff;
-			val += offset;
+			val = cbread & 0xffff;
 
-			seq_printf(s, "waiting on syncpt %d val %d (base %d, offset %d)\n",
-				   cbread >> 24, val, base, offset);
+			printk("%d: waiting on syncpt %d val %d (base %d = %d; offset = %d)\n",
+				i, cbread >> 24, baseval + val, base, baseval, val);
 			break;
 
 		default:
-			seq_printf(s, "active class %02x, offset %04x, val %08x\n",
-				   cbstat >> 16, cbstat & 0xffff, cbread);
+			printk("%d: active class %02x, offset %04x, val %08x\n",
+				   i, cbstat >> 16, cbstat & 0xffff, cbread);
 			break;
 		}
 
@@ -233,18 +216,18 @@ static int nvhost_debug_show(struct seq_file *s, void *unused)
 		 * it. */
 		if (size) {
 			u32 map_base = phys_addr & PAGE_MASK;
-			u32 map_size = (size * 4 + PAGE_SIZE - 1) & PAGE_MASK;
+			u32 map_size = ((phys_addr + size * 4 + PAGE_SIZE - 1) & PAGE_MASK) - map_base;
 			u32 map_offset = phys_addr - map_base;
 			void *map_addr = ioremap_nocache(map_base, map_size);
 
 			if (map_addr) {
 				u32 ii;
 
-				seq_printf(s, "\n%d: gather (%d words)\n", i, size);
+				printk("%d: gather (%d words)\n", i, size);
 				state = NVHOST_DBG_STATE_CMD;
 				for (ii = 0; ii < size; ii++) {
 					val = readl(map_addr + map_offset + ii*sizeof(u32));
-					nvhost_debug_handle_word(s, &state, &count, phys_addr + ii, i, val);
+					nvhost_debug_handle_word(&state, &count, phys_addr + ii * 4, i, val);
 				}
 				iounmap(map_addr);
 			}
@@ -253,7 +236,7 @@ static int nvhost_debug_show(struct seq_file *s, void *unused)
 		fifostat = readl(regs + HOST1X_CHANNEL_FIFOSTAT);
 		if ((fifostat & 1 << 10) == 0 ) {
 
-			seq_printf(s, "\n%d: fifo:\n", i);
+			printk("%d: fifo:\n", i);
 			writel(0x0, m->aperture + HOST1X_SYNC_CFPEEK_CTRL);
 			writel(1 << 31 | i << 16, m->aperture + HOST1X_SYNC_CFPEEK_CTRL);
 			rd_ptr = readl(m->aperture + HOST1X_SYNC_CFPEEK_PTRS) & 0x1ff;
@@ -269,7 +252,7 @@ static int nvhost_debug_show(struct seq_file *s, void *unused)
 				writel(1 << 31 | i << 16 | rd_ptr, m->aperture + HOST1X_SYNC_CFPEEK_CTRL);
 				val = readl(m->aperture + HOST1X_SYNC_CFPEEK_READ);
 
-				nvhost_debug_handle_word(s, &state, &count, 0, i, val);
+				nvhost_debug_handle_word(&state, &count, 0, i, val);
 
 				if (rd_ptr == end)
 					rd_ptr = start;
@@ -280,72 +263,33 @@ static int nvhost_debug_show(struct seq_file *s, void *unused)
 			} while (rd_ptr != wr_ptr);
 
 			if (state == NVHOST_DBG_STATE_DATA)
-				seq_printf(s, ", ...])\n");
+				printk(", ...])\n");
 		}
-
-		seq_printf(s, "\n");
 	}
-
-	nvhost_sync_reg_dump(s);
 
 	nvhost_module_idle(&m->mod);
 	return 0;
 }
 
-#ifdef CONFIG_DEBUG_FS
-
-static int nvhost_debug_open(struct inode *inode, struct file *file)
+void nvhost_sync_reg_dump(struct nvhost_dev *m)
 {
-	return single_open(file, nvhost_debug_show, inode->i_private);
-}
-
-static const struct file_operations nvhost_debug_fops = {
-	.open		= nvhost_debug_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
-void nvhost_debug_init(struct nvhost_master *master)
-{
-	debug_master = master;
-	debugfs_create_file("tegra_host", S_IRUGO, NULL, master, &nvhost_debug_fops);
-}
-#else
-void nvhost_debug_init(struct nvhost_master *master)
-{
-	debug_master = master;
-}
-
-#endif
-
-static char nvhost_debug_dump_buff[16 * 1024];
-
-void nvhost_debug_dump(void)
-{
-	struct seq_file s;
 	int i;
-	char c;
 
-	memset(&s, 0x0, sizeof(s));
-
-	s.buf = nvhost_debug_dump_buff;
-	s.size = sizeof(nvhost_debug_dump_buff);
-	s.private = debug_master;
-
-	nvhost_debug_show(&s, NULL);
-
-	i = 0;
-	while (i < s.count ) {
-		if ((s.count - i) > 256) {
-			c = s.buf[i + 256];
-			s.buf[i + 256] = 0;
-			printk("%s", s.buf + i);
-			s.buf[i + 256] = c;
-		} else {
-			printk("%s", s.buf + i);
-		}
-		i += 256;
+	for(i=0; i<0x1e0; i+=4)
+	{
+		if( !(i&0xf) )
+			printk("\n0x%08x : ", i);
+		printk("%08x  ", readl(m->sync_aperture + i));
 	}
+	printk("\n\n");
+	for(i=0x340; i<0x774; i+=4)
+	{
+		if( !(i&0xf) )
+			printk("\n0x%08x : ", i);
+		printk("%08x  ", readl(m->sync_aperture + i));
+	}
+
 }
+
+
 

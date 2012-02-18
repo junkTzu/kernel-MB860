@@ -208,6 +208,33 @@ static unsigned int dma_active_count(struct tegra_dma_channel *ch,
 	return bytes_transferred;
 }
 
+//Legacy compatibility code
+unsigned int tegra_dma_transferred_req(struct tegra_dma_channel *ch,
+       struct tegra_dma_req *req)
+{
+	unsigned long irq_flags;
+	unsigned int bytes_transferred;
+	unsigned int status;
+
+	if (IS_ERR_OR_NULL(ch))
+		BUG();
+
+	spin_lock_irqsave(&ch->lock, irq_flags);
+
+	if (list_entry(ch->list.next, struct tegra_dma_req, node)!=req) {
+		spin_unlock_irqrestore(&ch->lock, irq_flags);
+		return req->bytes_transferred;
+	}
+
+	status = readl(ch->addr + APB_DMA_CHAN_STA);
+	bytes_transferred = dma_active_count(ch, req, status);
+
+	spin_unlock_irqrestore(&ch->lock, irq_flags);
+
+	return bytes_transferred;
+}
+EXPORT_SYMBOL(tegra_dma_transferred_req);
+
 int tegra_dma_dequeue_req(struct tegra_dma_channel *ch,
 	struct tegra_dma_req *_req)
 {
