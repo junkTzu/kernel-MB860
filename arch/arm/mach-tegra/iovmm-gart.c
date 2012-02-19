@@ -56,7 +56,7 @@ struct gart_device {
 	bool			needs_barrier; /* emulator WAR */
 };
 
-static int gart_map(struct tegra_iovmm_device *, struct tegra_iovmm_area *);
+static int gart_map(struct tegra_iovmm_domain *, struct tegra_iovmm_area *);
 static void gart_unmap(struct tegra_iovmm_device *,
 	struct tegra_iovmm_area *, bool);
 static void gart_map_pfn(struct tegra_iovmm_device *,
@@ -258,10 +258,9 @@ static void __exit gart_exit(void)
 #define GART_PTE(_pfn) (0x80000000ul | ((_pfn)<<PAGE_SHIFT))
 
 
-static int gart_map(struct tegra_iovmm_device *dev,
-	struct tegra_iovmm_area *iovma)
+static int gart_map(struct tegra_iovmm_domain *domain, struct tegra_iovmm_area *iovma)
 {
-	struct gart_device *gart = container_of(dev, struct gart_device, iovmm);
+	struct gart_device *gart = container_of(domain, struct gart_device, domain);
 	unsigned long gart_page, count;
 	unsigned int i;
 
